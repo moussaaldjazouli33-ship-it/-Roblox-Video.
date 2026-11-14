@@ -67,7 +67,7 @@ export class World {
     [this.kidLight, this.kidLens, this.kidBeam] = mkDrop();
     this.puddles = new THREE.Group();
     const pm = new THREE.MeshStandardMaterial({ color: '#1a2233', roughness: 0.05, metalness: 0.9 });
-    for (const [x, z, r] of [[9, 20, 2.5], [-6, 21, 1.8], [12, 23.5, 1.5], [-11, 18.5, 2.2], [3, 18.5, 1.6]]) { const p = new THREE.Mesh(new THREE.CircleGeometry(r, 24), pm); p.rotation.x = -Math.PI / 2; p.position.set(x, 0.37, z); p.scale.y = 0.7; this.puddles.add(p); }
+    for (const [x, z, r] of [[9, 20, 2.5], [-6, 21, 1.8], [12, 23.5, 1.5], [-11, 18.5, 2.2], [6, 16.6, 1.9]]) { const p = new THREE.Mesh(new THREE.CircleGeometry(r, 24), pm); p.rotation.x = -Math.PI / 2; p.position.set(x, 0.37, z); p.scale.y = 0.7; this.puddles.add(p); }
     S.add(this.puddles);
 
     // façade avec habitants aux fenêtres

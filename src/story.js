@@ -181,7 +181,7 @@ function layFallen(w, t) {
 
 // un collègue court aider le garde tombé, s'accroupit, puis reprend son poste
 function helpFallen(w, t) {
-  const g = w.guards[HELP_GUARD], from = EMERG[HELP_GUARD], to = [7.0, 17.6], back = t > 98.5;
+  const g = w.guards[HELP_GUARD], from = EMERG[HELP_GUARD], to = [12.2, 18.2], back = t > 98.5;
   const k = back ? 1 - smooth(range(t, 98.5, 99.6)) : smooth(range(t, 86.2, 87.9));
   g.reset(); g.place(lerp(from[0], to[0], k), lerp(from[1], to[1], k), 0);
   if ((t < 87.9 && !back) || (back && t < 99.6)) { g.face(back ? from[0] : to[0], back ? from[1] : to[1]); g.run(t * 12); }
@@ -675,7 +675,7 @@ export const SHOTS = [
     const g = w.guards[SLIP_GUARD], [gx, gz] = EMERG[SLIP_GUARD];
     if (t < 85.25) { g.setFlashlight(1); }
     // la torche vole puis coule dans la flaque
-    const from = V(gx + 0.5, 4.5, gz + 0.8), to = V(11.6, 0.55, 21.8);
+    const from = V(gx - 0.5, 4.5, gz - 0.5), to = V(6.0, 0.55, 16.6);
     const sink = range(t, 87.1, 88.1);
     flyLight(w.dropLight, w.dropLens, w.dropBeam, t, 85.5, 86.5, from, to, { spin: 9, on: 1 - sink, height: 3.5 });
     if (t > 86.5) { w.dropLight.position.y = lerp(0.55, 0.1, sink); w.dropLight.rotation.z = -0.15; }
@@ -683,7 +683,8 @@ export const SHOTS = [
     if (t < 86.0) {
       w.setCam(lerp3([15, 2.6, 12.5], [14.5, 3, 13.5], range(t, 83.95, 86)), [gx, 2.6, gz], 46);
     } else {
-      w.setCam(lerp3([17.5, 3.4, 20.5], [16.5, 2.6, 21], range(t, 86, 88.75)), [11.4, 0.5, 21.6], 40);
+      w.setCam(lerp3([2.5, 3.6, 22.5], [3.2, 2.4, 21.2], range(t, 86, 88.75)), [6.0, 0.4, 16.6], 40);
+      w.guards[0].root.visible = false; w.guards[GRAB_GUARD].root.visible = false;
     }
     s.bloom = 0.8;
   } },
