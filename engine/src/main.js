@@ -87,7 +87,7 @@ window.renderAt = (t) => {
   const ov = Object.assign({ black: 0, white: 0, red: 0, old: 0 }, story.overlay ? story.overlay(t, shot) : {});
   const O = camera.userData.ov;
   O.black.material.opacity = ov.black; O.white.material.opacity = ov.white; O.red.material.opacity = ov.red;
-  O.sepia.material.opacity = ov.old * (0.42 + 0.05 * Math.sin(t * 37));
+  O.sepia.material.opacity = ov.old * (0.2 + 0.04 * Math.sin(t * 37));
   O.scan.material.opacity = ov.old * 0.5; O.scan.material.map.offset.y = (t * 0.7) % 1;
   renderer.render(scene, camera);
 };

@@ -359,7 +359,7 @@ export function buildWorld(scene, opts = {}) {
     silent: { top: '#000000', mid: '#000000', hor: '#000000', fog: '#0a0606', fogNear: 8, fogFar: 45, sun: '#ff5040', sunI: 0.0, hemiSky: '#6a4a48', hemiGround: '#120a0a', hemiI: 0.35, lamp: 0, exposure: 1.0 },
     vault:  { top: '#000000', mid: '#000000', hor: '#000000', fog: '#0d1116', fogNear: 15, fogFar: 90, sun: '#9fb4d0', sunI: 0.0, hemiSky: '#8a9ab8', hemiGround: '#15181e', hemiI: 0.8, lamp: 0, exposure: 1.0 },
     alarm:  { top: '#000000', mid: '#000000', hor: '#000000', fog: '#1e0606', fogNear: 15, fogFar: 85, sun: '#ff3020', sunI: 0.0, hemiSky: '#c04030', hemiGround: '#200606', hemiI: 0.9, lamp: 0, exposure: 1.0 },
-    lab:    { top: '#000000', mid: '#000000', hor: '#000000', fog: '#c9d6cf', fogNear: 30, fogFar: 120, sun: '#ffffff', sunI: 0.0, hemiSky: '#f4fff8', hemiGround: '#7d8a84', hemiI: 1.7, lamp: 0, exposure: 1.0 },
+    lab:    { top: '#000000', mid: '#000000', hor: '#000000', fog: '#0c1a14', fogNear: 18, fogFar: 70, sun: '#ffffff', sunI: 0.0, hemiSky: '#9fdcbc', hemiGround: '#0e1612', hemiI: 0.45, lamp: 0, exposure: 1.0 },
     dawn:   { top: '#6f7fae', mid: '#e3a58a', hor: '#ffd2a1', fog: '#e8b79c', fogNear: 50, fogFar: 300, sun: '#ffe0b0', sunI: 3.0, hemiSky: '#ffe2c8', hemiGround: '#6a5a5a', hemiI: 1.4, lamp: 0, exposure: 1.05 },
   };
   const ca = new THREE.Color(), cb = new THREE.Color();

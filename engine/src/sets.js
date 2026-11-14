@@ -19,6 +19,32 @@ function noiseTex(base, amt, n, seed, repeat, size = 256, extra) {
 }
 const tiles = (ctx, w, h, step, col) => { ctx.strokeStyle = col; ctx.lineWidth = 2; for (let i = 0; i <= w; i += step) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke(); } };
 
+
+// ---------------------------------------------------------------- shared atmosphere helpers
+function cone(parent, x, y, z, r0, r1, h, color, op) { // additive light shaft hanging down from (x,y,z)
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r0, r1, h, 20, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: op, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false }));
+  m.position.set(x, y - h / 2, z); parent.add(m); m.userData.base = op; return m;
+}
+function motes(parent, n, box, color, seed, size = 0.09) { // floating dust catching the light
+  const r = rng(seed), m = new THREE.InstancedMesh(new THREE.PlaneGeometry(size, size), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide }), n);
+  const sd = []; for (let i = 0; i < n; i++) sd.push([r(), r(), r(), r()]);
+  m.frustumCulled = false; parent.add(m);
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), e = new THREE.Euler(), sc = new THREE.Vector3();
+  return (t) => {
+    for (let i = 0; i < n; i++) {
+      const [a, b, c, d] = sd[i];
+      v.set(box[0] + a * (box[1] - box[0]) + Math.sin(t * 0.3 + d * 9) * 0.8, box[2] + ((b * (box[3] - box[2]) + t * (0.15 + d * 0.25)) % (box[3] - box[2])), box[4] + c * (box[5] - box[4]) + Math.cos(t * 0.25 + a * 7) * 0.8);
+      e.set(t * d, t * a, 0); q.setFromEuler(e); const s = 0.6 + d * 1.4; sc.set(s, s, s); m4.compose(v, q, sc); m.setMatrixAt(i, m4);
+    }
+    m.instanceMatrix.needsUpdate = true;
+  };
+}
+function steam(parent, x, y, z, seed, color = '#d8dde4') { // rising puffs
+  const r = rng(seed), n = 14, mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.12, depthWrite: false, fog: true });
+  const puffs = []; for (let i = 0; i < n; i++) { const p = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), mat.clone()); parent.add(p); puffs.push([p, r()]); }
+  return (t) => { for (const [p, ph] of puffs) { const k = (t * 0.35 + ph) % 1; p.position.set(x + Math.sin(ph * 20 + t) * k * 1.5, y + k * 9, z + Math.cos(ph * 13) * k * 1.2); p.scale.setScalar(0.5 + k * 2.6); p.material.opacity = 0.16 * Math.sin(k * Math.PI); } };
+}
+
 // ---------------------------------------------------------------- street hatches
 export function buildHatches(world) {
   const hatches = [];
@@ -247,6 +273,10 @@ export function buildVault(scene) {
   for (let z = 4; z < 45; z += 8) { box(g, 1.2, 22, 1.2, dark, X - 9.3, 11, z); box(g, 1.2, 22, 1.2, dark, X + 9.3, 11, z); }
   for (let i = 0; i < 3; i++) { const p = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 50, 10), metal); p.rotation.x = Math.PI / 2; p.position.set(X - 8.8, 15 + i, 20); g.add(p); const p2 = p.clone(); p2.position.x = X + 8.8; g.add(p2); }
   const corrLights = [];
+  const shafts = [];
+  for (let z = 6; z < 45; z += 12) shafts.push(cone(g, X, 13.8, z, 0.9, 5.5, 13.6, '#ffd9a8', 0.07));
+  const fx = [steam(g, X - 8.5, 13, 14, 1), steam(g, X + 8.5, 14, 30, 2), steam(g, X - 8.5, 13, 38, 3),
+    motes(g, 260, [X - 9, X + 9, 0.5, 20, 1, 44], '#ffe6c0', 77), motes(g, 420, [X - 30, X + 30, 0.5, 26, -56, -4], '#bfe3ff', 78)];
   for (let z = 6; z < 45; z += 12) { const l = new THREE.PointLight('#ffd9a8', 50, 20, 1.6); l.position.set(X, 13, z); g.add(l); corrLights.push(l); const h = new THREE.Mesh(new THREE.BoxGeometry(2, 0.3, 0.6), new THREE.MeshBasicMaterial({ color: '#ffe8c8', toneMapped: false })); h.position.set(X, 14, z); g.add(h); }
   // wall with the giant round door
   const stripe = canvasTex(THREE, 512, 64, (ctx, w, h) => { for (let i = -2; i < 20; i++) { ctx.fillStyle = '#e8b923'; ctx.beginPath(); ctx.moveTo(i * 40, h); ctx.lineTo(i * 40 + 20, h); ctx.lineTo(i * 40 + 60, 0); ctx.lineTo(i * 40 + 40, 0); ctx.fill(); } }, {});
@@ -274,6 +304,10 @@ export function buildVault(scene) {
   for (let i = 0; i < 3; i++) { const sb = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.4, 0.1), emblemMat); sb.position.set(-0.5 + i * 0.5, 0, 0); emblem.add(sb); }
   const hazard = new THREE.Mesh(new THREE.PlaneGeometry(20, 1.2), new THREE.MeshStandardMaterial({ map: stripe, roughness: 0.7 })); hazard.position.set(X, 0.62, 0.05); hazard.rotation.x = 0; g.add(hazard);
   const hazard2 = hazard.clone(); hazard2.position.y = 19; g.add(hazard2);
+  const seam = new THREE.Mesh(new THREE.BoxGeometry(0.18, 15.2, 0.2), new THREE.MeshBasicMaterial({ color: '#cfefff', transparent: true, opacity: 0, toneMapped: false })); seam.position.set(0, 0, 0.95); doorG.add(seam);
+  const innerRing = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.22, 8, 6), std('#5b6168', 0.3, 0.9)); innerRing.position.z = 0.95; doorG.add(innerRing);
+  const doorBeam = new THREE.Mesh(new THREE.CylinderGeometry(7.6, 11, 40, 32, 1, true), new THREE.MeshBasicMaterial({ color: '#e6f4ff', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false }));
+  doorBeam.rotation.x = Math.PI / 2; doorBeam.position.set(X, 9, 20); g.add(doorBeam);
   const behind = new THREE.PointLight('#e8f4ff', 0, 60, 1.2); behind.position.set(X, 9, -4); g.add(behind);
   const flood = new THREE.Mesh(new THREE.CircleGeometry(7.6, 40), new THREE.MeshBasicMaterial({ color: '#ffffff', toneMapped: false })); flood.position.set(X, 9, -0.8); g.add(flood);
 
@@ -327,6 +361,19 @@ export function buildVault(scene) {
     const spot = new THREE.SpotLight('#ff2a1a', 0, 60, 0.45, 0.6, 1.2); spot.position.set(0, 0, 0); bg.add(spot); bg.add(spot.target); spot.target.position.set(10, -8, 0);
     beacons.push([bg, spot, bg.children[0].material]);
   }
+  // glowing floor grid + hologram projector of the city
+  const gridTex = canvasTex(THREE, 256, 256, (ctx, w, h) => { ctx.clearRect(0, 0, w, h); ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 3; ctx.strokeRect(0, 0, w, h); ctx.lineWidth = 1; ctx.strokeRect(w / 2, 0, 0.1, h); ctx.strokeRect(0, h / 2, w, 0.1); }, { repeat: [14, 11] });
+  const grid = new THREE.Mesh(new THREE.PlaneGeometry(68, 54), new THREE.MeshBasicMaterial({ map: gridTex, color: '#2a9fd8', transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  grid.rotation.x = -Math.PI / 2; grid.position.set(X, 0.03, -31); g.add(grid);
+  const holo = new THREE.Group(); holo.position.set(X + 19, 0, -34); g.add(holo);
+  holo.add(new THREE.Mesh(new THREE.CylinderGeometry(2.2, 2.6, 1.2, 24), std('#22262b', 0.4, 0.7))); holo.children[0].position.y = 0.6;
+  const holoMat = new THREE.MeshBasicMaterial({ color: '#58c8ff', wireframe: true, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+  const globe = new THREE.Mesh(new THREE.IcosahedronGeometry(3.2, 2), holoMat); globe.position.y = 6; holo.add(globe);
+  const hring = new THREE.Mesh(new THREE.TorusGeometry(4.2, 0.06, 6, 64), holoMat); hring.position.y = 6; hring.rotation.x = Math.PI / 2; holo.add(hring);
+  const hbeam = cone(holo, 0, 9.5, 0, 3.6, 1.8, 8.4, '#58c8ff', 0.1);
+  const holo2 = holo.clone(true); holo2.position.x = X - 19; g.add(holo2);
+  const screenRays = new THREE.Mesh(new THREE.CylinderGeometry(12, 6, 24, 4, 1, true), new THREE.MeshBasicMaterial({ color: '#7fc8ff', transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false, toneMapped: false }));
+  screenRays.rotation.x = Math.PI / 2; screenRays.rotation.y = Math.PI / 4; screenRays.position.set(X, 11.5, -46); g.add(screenRays);
   const roomLight = new THREE.PointLight('#a8c4e8', 70, 80, 1.2); roomLight.position.set(X, 22, -25); g.add(roomLight);
 
   // ---- big screen painter (symbols only, never text)
@@ -374,9 +421,21 @@ export function buildVault(scene) {
     bctx.fillStyle = 'rgba(40,30,15,0.35)'; for (let y = 0; y < H; y += 3) bctx.fillRect(0, y, W, 1);
   };
   const vault = {
-    group: g, X, halves, emblem, emblemMat, behind, flood, monitors, beacons, big, screenGlow, roomLight, corrLights,
-    mode: 'feeds', redWave: -1, alarm: 0, doorOpen: 0, count: 10,
+    group: g, X, halves, emblem, seam, emblemMat, behind, flood, monitors, beacons, big, screenGlow, roomLight, corrLights,
+    mode: 'feeds', redWave: -1, alarm: 0, doorOpen: 0, count: 10, unlock: 0,
     update(t) {
+      for (const f of fx) f(t);
+      shafts.forEach((sh, i) => (sh.material.opacity = sh.userData.base * (0.8 + 0.2 * Math.sin(t * 1.3 + i))));
+      // unlock sequence, then door beam
+      const u = Math.max(vault.unlock, vault.doorOpen > 0 ? 1 : 0);
+      innerRing.rotation.z = u * Math.PI * 1.5; emblem.rotation.z = -u * Math.PI;
+      seam.material.opacity = clamp(u * 1.5) * (vault.doorOpen > 0.6 ? 0 : 1);
+      doorBeam.material.opacity = vault.doorOpen * 0.22 * (0.9 + 0.1 * Math.sin(t * 20));
+      const red = clamp(vault.alarm);
+      grid.material.color.setRGB(0.16 + 0.84 * red, 0.62 * (1 - red) + 0.05, 0.85 * (1 - red) + 0.03);
+      holoMat.color.setRGB(0.35 + 0.65 * red, 0.78 * (1 - red) + 0.1, 1 * (1 - red) + 0.08);
+      globe.rotation.y = t * 0.6; hring.rotation.z = -t * 0.9; holo2.children[1].rotation.y = -t * 0.5;
+      screenRays.material.color.copy(screenGlow.color); screenRays.material.opacity = 0.045 + 0.02 * Math.sin(t * 9);
       // door
       for (const [hg, s] of halves) hg.position.x = s * vault.doorOpen * 9;
       flood.material.color.setScalar(clamp(vault.doorOpen * 3)); flood.visible = vault.doorOpen > 0.001;
@@ -424,7 +483,7 @@ export function buildVault(scene) {
 // ---------------------------------------------------------------- lab (old recording)
 export function buildLab(scene) {
   const X = O.lab, g = new THREE.Group(); scene.add(g);
-  const tile = noiseTex('#e8ece8', 0.06, 2000, 15, [6, 3], 256, (ctx, w, h) => tiles(ctx, w, h, 32, 'rgba(120,140,130,0.45)'));
+  const tile = noiseTex('#7d8a84', 0.06, 2000, 15, [6, 3], 256, (ctx, w, h) => tiles(ctx, w, h, 32, 'rgba(120,140,130,0.45)'));
   const wm = std('#ffffff', 0.5, 0, { map: tile });
   box(g, 40, 0.4, 30, std('#ffffff', 0.6, 0, { map: tile.clone() }), X, -0.2, 0, false);
   box(g, 40, 16, 1, wm, X, 8, -15); box(g, 1, 16, 30, wm, X - 20, 8, 0); box(g, 1, 16, 30, wm, X + 20, 8, 0);
@@ -437,6 +496,37 @@ export function buildLab(scene) {
   const hood = new THREE.Mesh(new THREE.BoxGeometry(5, 2, 3), new THREE.MeshStandardMaterial({ color: '#cfefff', transparent: true, opacity: 0.25, roughness: 0.05 })); hood.position.set(X + 7, 3.5, -9); g.add(hood);
   // machines
   for (let i = 0; i < 3; i++) { box(g, 3, 7, 2.5, std('#c4ccd0', 0.5, 0.4), X + 12 + i * 3.2, 3.5, -13.5); const sc = new THREE.Mesh(new THREE.PlaneGeometry(2, 1.4), new THREE.MeshBasicMaterial({ color: '#4fd18b', toneMapped: false })); sc.position.set(X + 12 + i * 3.2, 5, -12.2); g.add(sc); }
-  const lights = []; for (const lx of [-8, 8]) { const l = new THREE.PointLight('#f2fff6', 120, 40, 1.3); l.position.set(X + lx, 14, -2); g.add(l); lights.push(l); }
-  return { group: g, X, update(t) { lights.forEach((l, i) => (l.intensity = 120 * (Math.sin(t * 40 + i) > 0.97 ? 0.6 : 1))); } };
+  const lights = []; for (const lx of [-8, 8]) { const l = new THREE.PointLight('#f2fff6', 45, 30, 1.4); l.position.set(X + lx, 10.5, lx < 0 ? 2 : -9); g.add(l); lights.push(l); }
+  // specimen tubes with glowing liquid and bubbles
+  const liquid = new THREE.MeshStandardMaterial({ color: '#58ff9a', emissive: '#2bd66a', emissiveIntensity: 1.4, transparent: true, opacity: 0.55, roughness: 0.1 });
+  const glassM = new THREE.MeshStandardMaterial({ color: '#dffcff', transparent: true, opacity: 0.18, roughness: 0.05, metalness: 0.6, depthWrite: false });
+  const capM = std('#8d969c', 0.3, 0.9), bubbleFx = [];
+  const tube = (x, z, h = 9, rad = 1.3) => {
+    const t1 = new THREE.Mesh(new THREE.CylinderGeometry(rad * 0.92, rad * 0.92, h * 0.9, 24), liquid); t1.position.set(x, 1 + h * 0.45, z); g.add(t1);
+    const t2 = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad, h, 24, 1, true), glassM); t2.position.set(x, 1 + h / 2, z); g.add(t2);
+    box(g, rad * 2.4, 1, rad * 2.4, capM, x, 0.5, z); box(g, rad * 2.4, 0.8, rad * 2.4, capM, x, 1.4 + h, z);
+    const pl = new THREE.PointLight('#4dff8e', 60, 16, 1.4); pl.position.set(x, 4, z + rad + 1); g.add(pl);
+    bubbleFx.push(motes(g, 40, [x - rad * 0.6, x + rad * 0.6, 1.2, 1 + h * 0.9, z - rad * 0.6, z + rad * 0.6], '#d8ffe6', Math.floor(x * 7 + z), 0.16));
+  };
+  for (let i = 0; i < 4; i++) { tube(X - 17, -10 + i * 6); tube(X + 17, -10 + i * 6); }
+  // central containment pod with a dark silhouette inside
+  tube(X - 8, 4, 10, 2.1);
+  const sil = new THREE.Mesh(new RoundedBoxGeometry(1.6, 4.5, 1, 2, 0.3), new THREE.MeshBasicMaterial({ color: '#0d2a18', transparent: true, opacity: 0.7 })); sil.position.set(X - 8, 5.5, 4); g.add(sil);
+  // cables on the floor
+  for (let i = 0; i < 6; i++) { const c = new THREE.Mesh(new THREE.TorusGeometry(3 + i * 0.6, 0.1, 6, 30, Math.PI), std('#1d1f22', 0.6)); c.rotation.x = -Math.PI / 2; c.position.set(X - 8 + i * 0.3, 0.1, 4 + 1 + i * 0.2); g.add(c); }
+  // hanging lamps with light cones
+  const lampCones = [];
+  for (const [lx, lz] of [[-2, -4], [7, -9], [-12, 2], [10, 4]]) {
+    box(g, 0.08, 4, 0.08, std('#333', 0.5), X + lx, 13.5, lz, false);
+    const shade = new THREE.Mesh(new THREE.ConeGeometry(1.1, 0.9, 16, 1, true), std('#2f3b36', 0.5, 0.6, { side: THREE.DoubleSide })); shade.position.set(X + lx, 11.3, lz); g.add(shade);
+    lampCones.push(cone(g, X + lx, 11, lz, 0.9, 4.2, 11, '#fff6d8', 0.08));
+  }
+  const key = new THREE.SpotLight('#fff1d6', 400, 30, 0.45, 0.6, 1.2); key.position.set(X + 3, 13, 4); key.target.position.set(X + 1, 3, -4); g.add(key); g.add(key.target);
+  const labMotes = motes(g, 300, [X - 18, X + 18, 0.5, 14, -14, 12], '#fff6d8', 91);
+  return { group: g, X, update(t) {
+    lights.forEach((l, i) => (l.intensity = 45 * (Math.sin(t * 40 + i) > 0.97 ? 0.5 : 1)));
+    for (const f of bubbleFx) f(t); labMotes(t);
+    liquid.emissiveIntensity = 1.2 + 0.3 * Math.sin(t * 2.2);
+    lampCones.forEach((c, i) => (c.material.opacity = 0.07 + 0.02 * Math.sin(t * 3 + i)));
+  } };
 }

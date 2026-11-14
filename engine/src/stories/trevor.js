@@ -52,7 +52,8 @@ export default {
     for (const c of [trevor, sci, ...zs, ...npcs]) c.root.visible = false;
     baby.visible = false;
     for (const h of hatches) h.setOpen(0, 0);
-    trevor.setFace('neutral');
+    trevor.setFace('neutral'); trevor.faceMesh.material.emissiveIntensity = trevor.face === 'infected' ? 2.2 : 0;
+    Object.assign(sets.vault, { doorOpen: 0, mode: 'feeds', redWave: t > 48.3 ? 48.3 : -1, alarm: 0, count: 10, unlock: 0 });
     shot.act && shot.act(t - shot.start, t);
     if (sets[shot.set]) sets[shot.set].update(t);
   },
@@ -60,10 +61,10 @@ export default {
   overlay(t, shot) {
     const o = { black: 0, white: 0, red: 0, old: shot.old ? 1 : 0 };
     if (t < 0.35) o.black = 1 - t / 0.35;
-    if (t > 83.55) o.black = clamp((t - 83.55) / 0.5);
+    if (t > 83.72) o.black = clamp((t - 83.72) / 0.37);
     const flash = (at, dur, amt = 1) => (t >= at && t < at + dur ? (1 - (t - at) / dur) * amt : 0);
-    o.white = Math.max(flash(4.72, 0.35, 0.9), flash(40.15, 0.7, 1), flash(58.3, 0.3, 0.8), flash(61.45, 0.25, 0.9), flash(73.2, 0.25, 0.6));
-    o.red = Math.max(flash(50.15, 0.5, 0.45), flash(63.9, 0.45, 0.4), flash(76.17, 0.35, 0.4), flash(77.0, 0.35, 0.4), flash(77.99, 0.35, 0.45),
+    o.white = Math.max(flash(4.72, 0.35, 0.9), flash(40.15, 0.7, 1), flash(58.3, 0.3, 0.8), flash(61.45, 0.25, 0.9), flash(73.2, 0.25, 0.6), flash(39.95, 0.25, 0.35));
+    o.red = Math.max(flash(50.15, 0.5, 0.45), flash(63.9, 0.45, 0.4), flash(76.17, 0.35, 0.4), flash(77.0, 0.35, 0.4), flash(77.99, 0.35, 0.45), flash(82.51, 0.6, 0.35),
       shot.redPulse ? 0.12 + 0.1 * Math.sin(t * 7) : 0);
     return o;
   },
@@ -250,7 +251,7 @@ function buildShots() {
     (lt, t) => {
       place(trevor, V + 1.6, 0, 3.4, 0); trevor.setFace(lt > 1.2 ? 'shocked' : 'determined');
       trevor.pose({ t, reachR: ramp(lt, 0.1, 0.6) * (1 - ramp(lt, 1.25, 1.6)), cower: ramp(lt, 1.25, 1.5) * 0.3 });
-      sets.vault.doorOpen = easeIn(clamp((lt - 1.2) / 0.75)); sets.vault.mode = 'feeds';
+      sets.vault.unlock = easeInOut(clamp((lt - 0.55) / 0.6)); sets.vault.doorOpen = easeIn(clamp((lt - 1.2) / 0.75)); sets.vault.mode = 'feeds';
     });
 
   // 20 — Inside, hundreds of monitors showed every bunker in the city.
@@ -329,14 +330,14 @@ function buildShots() {
   const LA = O.lab;
   const scientist = (t) => {
     place(sci, LA + 1, 0, -4, FWD); sci.setFace('smile'); sci.pose({ t, hold: 1, headPitch: 0.35 });
-    baby.visible = true; baby.position.set(LA + 1, 3.95, -4 + 1.75); baby.rotation.set(0, Math.PI / 2, 0.1);
+    baby.visible = true; baby.position.set(LA + 1, 3.95, -4 + 1.75); baby.rotation.set(0.12, 0, 0);
   };
   add(58.3, 60.7, 'lab', 'lab',
-    cam([LA + 4, 6, 10], [LA + 1, 4.5, -4], [LA + 2.5, 5.6, 6.5], [LA + 1, 4.3, -4], 40, 38, { shake: 0.05 }),
+    cam([LA + 13, 10, 17], [LA - 1, 4.5, -4], [LA + 3, 5.8, 7], [LA + 1, 4.3, -4], 50, 38, { shake: 0.05 }),
     (lt, t) => scientist(t), { old: true });
   // 30 — That baby was me.
   add(60.7, 61.45, 'lab', 'lab',
-    cam([LA + 0.5, 7.0, 1.2], [LA + 0.45, 4.2, -2.25], [LA + 0.45, 6.4, 0.3], [LA + 0.4, 4.2, -2.25], 40, 34, { shake: 0.03 }),
+    cam([LA + 1, 8.6, -0.4], [LA + 1, 4.4, -2.8], [LA + 1, 7.6, -1.3], [LA + 1, 4.4, -2.85], 36, 32, { shake: 0.03 }),
     (lt, t) => scientist(t), { old: true });
   add(61.45, 62.0, 'vault', 'alarm',
     cam([V + 0.3, 4.9, TZ - 3.6], [V, 4.65, TZ], [V + 0.2, 4.85, TZ - 3.1], [V, 4.65, TZ], 34),
@@ -390,7 +391,7 @@ function buildShots() {
   // 38 — Ten… Nine… Eight…
   add(76.15, 76.98, 'vault', 'alarm',
     cam([V + 0.2, 11.5, -42], [V, 11.5, -58.5], [V + 0.1, 11.5, -43.5], [V, 11.5, -58.5], 42),
-    (lt, t) => { Object.assign(sets.vault, { alarm: 1, mode: 'activated', count: lt < 0.25 ? 10 : 9 }); }, { redPulse: true });
+    (lt, t) => { Object.assign(sets.vault, { alarm: 1, mode: 'activated', count: lt < 0.02 ? 10 : 9 }); }, { redPulse: true });
   add(76.98, 77.97, 'vault', 'alarm',
     cam([V + 0.15, 5.2, TZ - 2.5], [V, 5.15, TZ], [V + 0.1, 5.2, TZ - 2.1], [V, 5.15, TZ], 30),
     (lt, t) => { Object.assign(sets.vault, { alarm: 1, mode: 'activated', count: 8 }); place(trevor, V, 0, TZ, 0); trevor.setFace('infected'); trevor.pose({ t }); }, { redPulse: true });
@@ -405,14 +406,19 @@ function buildShots() {
       hatches.forEach((h) => { const d = -h.g.position.z; const k = easeOut(clamp((lt - d / 120) / 0.5)); h.setOpen(k, k); });
       for (let i = 0; i < 10; i++) { const zb = zs[i]; const z = -20 - i * 9; place(zb, -4 + (i % 3) * 4, 0, z, FWD); zb.pose({ t: t + i, zombie: 1, headPitch: -0.3 }); }
     }, { wind: 1.8 });
-  // 40 — And a voice whispered: Phase Two has begun.
-  add(81.2, 84.1, 'street', ['night', 'danger', () => 0.55],
-    cam([1.0, 4.6, -22], [0.6, 4.8, -32], [0.8, 4.9, -27.2], [0.6, 4.95, -32], 44, 36, { shake: 0.03 }),
-    (lt, t) => {
-      hatches.forEach((h) => h.setOpen(1, 1));
-      place(trevor, 0.6, 0, -32, FWD); trevor.setFace('infected'); trevor.pose({ t, headPitch: -0.05 });
-      for (let i = 0; i < 12; i++) { const zb = zs[i]; const side = i % 2 ? 1 : -1; const z = -36 - Math.floor(i / 2) * 3.5; place(zb, side * (2.6 + (i % 3) * 1.3), 0, z, FWD); zb.pose({ t: t + i, zombie: 0.5, bow: 0.15 }); }
-    }, { wind: 0.8 });
+  // 40 — And a voice whispered: … PHASE TWO has begun.
+  const finale = (lt, t, surge) => {
+    hatches.forEach((h) => h.setOpen(1, 1 + surge * 0.9));
+    place(trevor, 0.6, 0, -32, FWD); trevor.setFace('infected'); trevor.pose({ t, headPitch: -0.05 - surge * 0.08 });
+    trevor.faceMesh.material.emissiveIntensity = 2.2 + surge * 3.5;
+    for (let i = 0; i < 12; i++) { const zb = zs[i]; const side = i % 2 ? 1 : -1; const z = -36 - Math.floor(i / 2) * 3.5; place(zb, side * (2.6 + (i % 3) * 1.3), 0, z, FWD); zb.pose({ t: t + i, zombie: 0.5 + surge * 0.5, bow: 0.15 * (1 - surge), headPitch: -0.45 * surge }); }
+  };
+  add(81.2, 82.51, 'street', ['night', 'danger', () => 0.55],
+    cam([1.0, 4.6, -22], [0.6, 4.8, -32], [0.85, 4.85, -25.0], [0.6, 4.95, -32], 44, 40, { shake: 0.03 }),
+    (lt, t) => finale(lt, t, 0), { wind: 0.8 });
+  add(82.51, 84.1, 'street', ['night', 'danger', (lt) => 0.55 + 0.45 * ramp(lt, 0, 0.3)],
+    cam([0.85, 4.85, -25.0], [0.6, 4.95, -32], [0.7, 4.98, -28.4], [0.6, 5.0, -32], 40, 32, { shake: 0.04, ease: easeOut, impact: { at: 82.52, dur: 0.45, amt: 0.14 } }),
+    (lt, t) => finale(lt, t, ramp(lt, 0, 0.25)), { wind: 1.6 });
 
   return sh;
 }
