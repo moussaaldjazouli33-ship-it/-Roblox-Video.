@@ -51,6 +51,7 @@ export class World {
     this.dad.hand.L.add(this.radio); this.radio.position.set(0, -0.2, 0.3);
     this.guards = Array.from({ length: 12 }, (_, i) => { const g = new Rig({ ...LOOKS.guard, skin: ['#f2c690', '#c58c5c', '#8d5a3b', '#e8b98a'][i % 4] }); g.giveFlashlight('R', 24); return g; });
     this.civilians = Array.from({ length: 7 }, (_, i) => civilian(i));
+    this.civilians[1].giveFlashlight('R', 30);
     this.windowPeople = Array.from({ length: 6 }, (_, i) => { const c = civilian(i + 2); c.giveFlashlight('R', 40); c.flashlight.beam.scale.set(1.4, 1, 1.4); return c; });
     for (const r of [this.kid, this.dad, ...this.guards, ...this.civilians]) S.add(r.root);
     // lampes torches "libres" (qui volent / roulent / coulent)

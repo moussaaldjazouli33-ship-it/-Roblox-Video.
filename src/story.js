@@ -19,6 +19,53 @@ const mixPose = (a, b, k) => { const o = {}; for (const key in a) o[key] = Array
 // pose de marche du monstre (dans le noir)
 const walkPose = (ph) => ({ ...P_REACH, lean: 0.3, legL: [Math.sin(ph) * 0.5 - 0.1, -0.08, Math.max(0, -Math.sin(ph)) * 0.8], legR: [-Math.sin(ph) * 0.5 - 0.1, 0.08, Math.max(0, Math.sin(ph)) * 0.8], armL: [-0.3 + Math.sin(ph) * 0.3, 0, -0.4, -0.6], armR: [-0.6 - Math.sin(ph) * 0.3, 0, 0.3, -0.6] });
 
+// vraie foulée : jambes, genoux, contre-balancement des bras, tête, rebond du bassin
+function stride(ph, { base = P_REACH, amp = 1, headYaw = 0, headPitch = null } = {}) {
+  const sn = Math.sin(ph), cs = Math.cos(ph);
+  return { ...base, lean: base.lean + 0.06 * Math.abs(cs), twist: sn * 0.12 * amp, side: cs * 0.04 * amp,
+    head: [headPitch ?? base.head[0], headYaw + sn * 0.08, -sn * 0.05],
+    legL: [sn * 0.55 * amp - 0.1, -0.08, Math.max(0, -sn) * 0.9 * amp + 0.1], legR: [-sn * 0.55 * amp - 0.1, 0.08, Math.max(0, sn) * 0.9 * amp + 0.1],
+    armL: [base.armL[0] - sn * 0.35 * amp, base.armL[1], base.armL[2], base.armL[3]], armR: [base.armR[0] + sn * 0.35 * amp, base.armR[1], base.armR[2], base.armR[3]] };
+}
+// le monstre marche de `from` à `to` entre t0 et t1 (position, orientation, foulée liée à la distance)
+function monsterWalk(M, t, t0, t1, from, to, opt = {}) {
+  const k = (opt.ease || easeInOut)(range(t, t0, t1));
+  const x = lerp(from[0], to[0], k), z = lerp(from[1], to[1], k);
+  const dist = Math.hypot(to[0] - from[0], to[1] - from[1]) * k;
+  const ph = dist / (opt.step || 6) * Math.PI + (opt.phase || 0);
+  M.root.position.set(x, -Math.abs(Math.sin(ph)) * 0.8, z);
+  M.root.rotation.y = opt.heading ?? Math.atan2(to[0] - from[0], to[1] - from[1]);
+  const moving = t > t0 && t < t1;
+  M.setPose(moving || opt.hold ? stride(ph, opt) : (opt.rest || P_FROZEN));
+  return ph;
+}
+// IK : trouve la pose du bras droit qui amène le bout des griffes sur `target` (descente par coordonnées, mise en cache)
+const ikCache = new Map();
+function reachPose(M, basePose, target, side = 'R') {
+  const key = side + target.toArray().map(v => v.toFixed(1)).join(',') + M.root.position.toArray().map(v => v.toFixed(1)).join(',');
+  if (ikCache.has(key)) return ikCache.get(key);
+  const arm = 'arm' + side, p = { ...basePose, [arm]: [...basePose[arm]] };
+  const tip = M.arm[side].fingers[1].tip, v = new THREE.Vector3();
+  const err = () => { M.setPose(p); M.root.updateMatrixWorld(true); return tip.getWorldPosition(v).distanceTo(target); };
+  let best = err(), stepSize = 0.4;
+  for (let it = 0; it < 60 && best > 0.3; it++) {
+    let improved = false;
+    for (let j = 0; j < 4; j++) for (const d of [stepSize, -stepSize]) {
+      p[arm][j] += d; const e = err();
+      if (e < best) { best = e; improved = true; } else p[arm][j] -= d;
+    }
+    if (!improved) stepSize *= 0.5;
+    if (stepSize < 0.005) break;
+  }
+  const out = { ...p, [arm]: [...p[arm]] }; ikCache.set(key, out); M.setPose(basePose);
+  return out;
+}
+// caméra « à l'épaule » : légère dérive permanente
+function handheld(w, t, a = 1) {
+  const c = w.camera; c.position.x += noise1(t * 0.6, 11) * 0.12 * a; c.position.y += noise1(t * 0.5, 12) * 0.08 * a;
+  c.rotation.z += noise1(t * 0.4, 13) * 0.008 * a; c.rotation.x += noise1(t * 0.45, 14) * 0.006 * a;
+}
+
 // ---------- Positions de référence ----------
 const POST_DAD = [-2.2, 25.2], POST_KID = [1.6, 25.8];
 const MONSTER_FRONT = [0, 0, 9];
@@ -28,7 +75,8 @@ const EMERG = Array.from({ length: 12 }, (_, i) => {
   const a = (i / 12) * TAU + 0.28; return [Math.sin(a) * 21, Math.cos(a) * 21];
 });
 EMERG[SLIP_GUARD] = [9.5, 19.2];
-EMERG[GRAB_GUARD] = [-7.5, 19.5];
+EMERG[GRAB_GUARD] = [5.0, 17.6];
+const HELP_GUARD = 2;
 const CAR_ANG = [0.55, 1.4, 2.3, 3.4, 4.3, 5.4];
 const carPos = (i, k) => { const r = lerp(105, 44, k), a = CAR_ANG[i]; return [Math.sin(a) * r, Math.cos(a) * r, a + Math.PI]; };
 const monsterChest = (w) => (w.monster.root.updateMatrixWorld(true), w.monster.chest).getWorldPosition(new THREE.Vector3()).add(V(0, 4, 0));
@@ -49,8 +97,13 @@ function aimAt(rig, target, side = 'R') {
 }
 function standEmergency(w, t, i, aim = 1) {
   const g = w.guards[i], [x, z] = EMERG[i];
-  g.place(x, z, 0).face(0, 0).idle(t + i, 0.6);
-  if (aim > 0) { aimAt(g, monsterChest(w)); g.armR.rotation.x = lerp(-0.3, g.armR.rotation.x, aim); g.setFlashlight(1); }
+  g.place(x, z, 0).face(0, 0).idle(t + i * 1.7, 0.8);
+  if (aim > 0) {
+    aimAt(g, monsterChest(w)); g.armR.rotation.x = lerp(-0.3, g.armR.rotation.x, aim); g.setFlashlight(1);
+    // la torche tremble / balaie légèrement, le garde surveille autour de lui
+    g.armR.rotation.x += noise1(t * 0.7, i) * 0.07; g.armR.rotation.y = noise1(t * 0.5, i + 9) * 0.1;
+    g.armL.rotation.x = -0.5 + noise1(t * 0.4, i + 3) * 0.15;
+  }
 }
 
 // ---------- État "par défaut" du monde à l'instant t (continuité entre les plans) ----------
@@ -95,10 +148,10 @@ function base(w, t, s) {
   }
   if (t > 75.64) w.guards.forEach(g => g.setFlashlight(1));
   if (t > 85.2) layFallen(w, t);
-  if (t > 102.6) w.guards[GRAB_GUARD].root.visible = false;
+  if (t > 86.2) helpFallen(w, t);
   // le monstre, après le noir, est juste devant le poste
   if (t > 99.6) { M.root.position.set(...MONSTER_FRONT); M.setPose(P_CROUCH); w.fence.visible = true; }
-  if (t > 104.9) holdGuard(w, t);
+  if (t > 103.6) holdGuard(w, t);
   // pluie / orage
   s.rain = t > 82.4 ? Math.min(1, (t - 82.4) / 1.2) : 0;
   return s;
@@ -126,6 +179,17 @@ function layFallen(w, t) {
   }
 }
 
+// un collègue court aider le garde tombé, s'accroupit, puis reprend son poste
+function helpFallen(w, t) {
+  const g = w.guards[HELP_GUARD], from = EMERG[HELP_GUARD], to = [7.0, 17.6], back = t > 98.5;
+  const k = back ? 1 - smooth(range(t, 98.5, 99.6)) : smooth(range(t, 86.2, 87.9));
+  g.reset(); g.place(lerp(from[0], to[0], k), lerp(from[1], to[1], k), 0);
+  if ((t < 87.9 && !back) || (back && t < 99.6)) { g.face(back ? from[0] : to[0], back ? from[1] : to[1]); g.run(t * 12); }
+  else if (!back) { g.face(EMERG[SLIP_GUARD][0], EMERG[SLIP_GUARD][1]); g.crouch(smooth(range(t, 87.9, 88.3))); g.armL.rotation.x = -1.2; g.setFace('worried'); }
+  else standEmergency(w, t, HELP_GUARD, 1);
+  g.setFlashlight(1);
+}
+
 function holdGuard(w, t) {
   // le garde pend sous les griffes de la main droite, bras levés, jambes qui gigotent
   const g = w.guards[GRAB_GUARD];
@@ -137,8 +201,9 @@ function holdGuard(w, t) {
   g.root.rotation.z = sw;
   const br = Math.sin(t * 3.1);
   g.torso.scale.set(1 + br * 0.03, 1, 1 + br * 0.06); // respiration
-  g.armL.rotation.set(-3.0 + Math.sin(t * 2.4) * 0.08, 0, 0.15); g.armR.rotation.set(-3.0 + Math.cos(t * 2.2) * 0.08, 0, -0.15);
-  g.legL.rotation.x = 0.25 + Math.sin(t * 2.6) * 0.35; g.legR.rotation.x = -0.15 + Math.sin(t * 2.6 + 2) * 0.35;
+  const fr = t < 106 ? 2.2 : 1; // il se débat plus fort juste après la capture
+  g.armL.rotation.set(-3.0 + Math.sin(t * 2.4 * fr) * 0.08 * fr, 0, 0.15); g.armR.rotation.set(-3.0 + Math.cos(t * 2.2 * fr) * 0.08 * fr, 0, -0.15);
+  g.legL.rotation.x = 0.25 + Math.sin(t * 2.6 * fr) * 0.35 * fr; g.legR.rotation.x = -0.15 + Math.sin(t * 2.6 * fr + 2) * 0.35 * fr;
   g.neck.rotation.x = -0.25 + Math.sin(t * 3.1) * 0.05;
   g.setFace('scared'); g.setFlashlight(0);
 }
@@ -161,10 +226,24 @@ function underlight(w, k = 1) {
 // garçon et père à leur poste
 function atPost(w, t, { kidFace = 'smile', dadFace = 'serious', lookMonster = true } = {}) {
   show([w.kid, w.dad], true);
-  w.dad.place(...POST_DAD, Math.PI).idle(t, 0.5);
-  w.kid.place(...POST_KID, Math.PI).idle(t + 1, 0.8);
-  if (lookMonster) { w.dad.face(0, 0); w.kid.face(0, 0); w.dad.neck.rotation.x = -0.25; w.kid.neck.rotation.x = -0.3; }
+  w.dad.place(...POST_DAD, Math.PI).idle(t, 0.8);
+  w.kid.place(...POST_KID, Math.PI).idle(t * 1.3 + 1, 1.1);
+  if (lookMonster) { w.dad.face(0, 0); w.kid.face(0, 0); w.dad.neck.rotation.x = -0.25 + Math.sin(t * 0.6) * 0.06; w.kid.neck.rotation.x = -0.3 + Math.sin(t * 0.8) * 0.08; }
+  // réactions à l'orage : sursaut à chaque éclair
+  const b = lightningAt(t)[0];
+  if (b > 0.3) { w.kid.flinch(Math.min(1, b * 1.4)); w.dad.neck.rotation.x += b * 0.2; }
+  if (t > 77) w.kid.shiver(t, 0.8);
   w.kid.setFace(kidFace); w.dad.setFace(dadFace);
+}
+
+// passants qui traversent la place en journée (la vie continue autour du monstre figé)
+function crowd(w, t) {
+  const paths = [[[-45, 40], [45, 42]], [[44, -38], [-44, -40]], [[-40, -46], [-38, 46]], [[40, 46], [42, -44]]];
+  [3, 4, 5, 6].forEach((ci, j) => {
+    const c = w.civilians[ci], [a, b] = paths[j], k = ((t * 0.035 + j * 0.27) % 1);
+    c.root.visible = true; c.reset(); c.place(lerp(a[0], b[0], k), lerp(a[1], b[1], k), 0).face(b[0], b[1]).walk(t * 5.5 + j, 0.6);
+    c.neck.rotation.y = Math.sin(t * 0.8 + j) * 0.5; c.setFace(j % 2 ? 'smile' : 'worried');
+  });
 }
 
 // lampe qui vole / roule (objet libre)
@@ -190,96 +269,134 @@ export const SHOTS = [
   } },
   // 4.12 « And if the lights go out for even one second, nobody is safe. »
   { at: 4.0, name: 'Les lumières vacillent', run(w, t, s) {
+
     const k = range(t, 4, 8.3);
-    w.setCam(lerp3([5, 3, 26], [3, 6.5, 21], easeInOut(k)), [0, 35, 0], lerp(58, 46, k));
-    // à « one second » : tout s'éteint une seconde
+    w.setCam(lerp3([5, 3, 26], [3, 6.5, 21], easeInOut(k)), [0, 35, 2], lerp(58, 46, k));
+    // à « one second » : tout s'éteint une seconde… et le monstre BOUGE (un pas, la tête se tourne vers nous, le bras se lève)
     const off = t > 5.7 && t < 6.75;
     const flick = off ? 0 : (t > 5.5 && t < 5.7 ? (Math.floor(t * 30) % 2) : 1);
     w.towers.forEach(tw => tw.set(flick));
     w.guards.forEach(g => g.setFlashlight(flick));
-    s.ambient = flick ? 1 : 0.25; s.night = 1;
+    s.ambient = flick ? 1 : 0.3; s.night = 1;
     w.monster.eyes(off ? 1 : 0);
-    const twitch = seg(t, 5.9, 6.6);
-    w.monster.setPose(mixPose(P_FROZEN, { ...P_FROZEN, head: [0.05, -0.25, -0.1], armR: [-0.9, 0.1, 0.3, -0.6] }, twitch));
+    const m = smooth(range(t, 5.75, 6.7));
+    const target = { ...P_REACH, head: [0.25, -0.45, -0.12], armR: [-1.7, 0.1, 0.35, -0.3], curlR: 0 };
+    const ph = m * Math.PI * 1.5;
+    const pose = mixPose(P_FROZEN, target, m);
+    if (m > 0 && m < 1) { const st = stride(ph, { base: pose, amp: 0.8 }); w.monster.setPose({ ...st, head: pose.head, armR: pose.armR }); }
+    else w.monster.setPose(pose);
+    w.monster.root.position.z = 2.5 * m;
     if (off) w.shake(0.15, t);
     if (t > 6.7) w.shake(0.35 * (1 - range(t, 6.7, 7.4)), t);
+    // les gardes sursautent au retour de la lumière
+    if (t > 6.75) w.guards.forEach((g, i) => g.flinch(0.6 * (1 - range(t, 6.8 + (i % 3) * 0.1, 7.6))));
   } },
   // 8.48 « Three years ago, it appeared in the middle of our town. »
   { at: 8.3, name: 'Flash-back – apparition', run(w, t, s) {
+
     s.sepia = 0.55; s.label = { text: '3 YEARS AGO', a: pulse(t, 8.4, 11.3, 0.25) };
     w.towers.forEach(tw => (tw.root.visible = false)); w.fence.visible = false; show(w.guards, false); w.cable.visible = false; w.panel.visible = false; w.cars.forEach(c => (c.root.visible = false));
-    const rise = easeOut(range(t, 9.3, 11.0));
+    const rise = easeOut(range(t, 9.3, 10.6));
     w.monster.root.position.y = lerp(-44, 0, rise);
-    w.monster.setPose(mixPose(P_REST, P_REACH, smooth(range(t, 10.2, 11.3)) * 0.6));
-    w.monster.eyes(0.6);
+    // il surgit, lève les bras (rugissement), puis tourne la tête vers les passants et tend la main
+    const roar = smooth(range(t, 9.6, 10.3)) * (1 - smooth(range(t, 10.6, 11.1)));
+    const ROAR = { ...P_REST, lean: -0.1, head: [-0.5, 0, 0], armL: [-2.5, 0, -0.7, -0.4], armR: [-2.5, 0, 0.7, -0.4], curlL: 0, curlR: 0 };
+    const look = smooth(range(t, 10.6, 11.3));
+    let pose = mixPose(P_REST, ROAR, roar);
+    pose = mixPose(pose, { ...P_REACH, head: [0.4, 0.5, 0.1], twist: 0.25 }, look);
+    w.monster.setPose(pose);
+    w.monster.spine.rotation.z += Math.sin(t * 25) * 0.03 * roar;
+    w.monster.eyes(0.6 + 0.4 * roar);
     w.rubble.visible = true; w.rubble.scale.setScalar(lerp(0.2, 1, rise)); w.rubble.position.y = Math.sin(rise * Math.PI) * 4;
-    // des passants s'enfuient
+    // des passants regardent, puis s'enfuient en courant
     show(w.civilians, true);
     w.civilians.forEach((c, i) => {
-      const a = i * 0.9 + 0.3, r0 = 14 + i * 2.2, run = range(t, 9.4 + i * 0.05, 11.3);
-      const r = r0 + run * 16;
-      c.place(Math.sin(a) * r, Math.cos(a) * r, a).run(t * 11 + i);
-      c.setFace(run > 0 ? 'scared' : 'smile');
-      if (run <= 0) c.reset().idle(t);
+      const a = i * 0.9 + 0.3, r0 = 15 + i * 2.2, run = range(t, 9.5 + i * 0.07, 11.3);
+      const r = r0 + run * 17;
+      c.place(Math.sin(a) * r, Math.cos(a) * r, a);
+      if (run > 0) { c.run(t * 12 + i); c.setFace('scared'); if (i % 2) { c.armL.rotation.x = -2.6; } c.neck.rotation.y = Math.sin(t * 5 + i) * 0.5; }
+      else { c.face(0, 0); c.idle(t + i); c.setFace('smile'); if (t > 9.3) { c.flinch(seg(t, 9.3, 9.5)); c.setFace('scared'); } }
     });
     const k = range(t, 8.3, 11.3);
-    w.setCam(lerp3([10, 4, 62], [6, 9, 50], easeOut(k)), [0, lerp(8, 22, rise), 0], 54);
-    if (t > 9.3) w.shake(0.6 * (1 - range(t, 10.6, 11.3)), t, 22);
+    w.setCam(lerp3([10, 4, 62], [6, 9, 50], easeOut(k)), [0, lerp(8, 24, rise), 0], lerp(54, 48, k));
+    if (t > 9.3) w.shake(0.6 * (1 - range(t, 10.6, 11.3)) + 0.3 * roar, t, 22);
     s.flash = 0.6 * (1 - range(t, 8.3, 8.55));
   } },
   // 11.52 « By sunrise, seven people had vanished. »
   { at: 11.3, name: 'Flash-back – disparitions', run(w, t, s) {
+
     s.sepia = 0.55; s.label = { text: '3 YEARS AGO', a: 1 - range(t, 13.6, 14.1) };
     w.towers.forEach(tw => (tw.root.visible = false)); w.fence.visible = false; show(w.guards, false); w.cable.visible = false; w.panel.visible = false; w.cars.forEach(c => (c.root.visible = false));
     show(w.civilians, true);
-    // 7 personnes ; chaque coupure de lumière en fait disparaître une
+    // 7 personnes ; chaque coupure de lumière en fait disparaître une, le monstre avance vers elles
     const flick = [12.0, 12.35, 12.7, 13.0, 13.25, 13.5, 13.75];
     let blk = 0;
+    const n = flick.filter(f => t > f + 0.06).length;
     w.civilians.forEach((c, i) => {
-      c.place(-13 + i * 4.2, 48 + (i % 2) * 1.5, Math.PI).idle(t * 1.3 + i, 1.2);
-      c.setFace('scared'); c.neck.rotation.y = Math.sin(t * 3 + i) * 0.5;
+      // ils reculent, regardent partout ; à partir de 3 disparus les autres paniquent
+      const back = range(t, 11.3, 14.1) * 3;
+      c.place(-13 + i * 4.2, 47 + (i % 2) * 1.5 + back, Math.PI);
+      if (n >= 3) { c.run(t * 10 + i, 0.6); c.panic(t + i); } else { c.walk(t * 3 + i, 0.25); c.armL.rotation.x = -0.6; }
+      c.setFace('scared'); c.neck.rotation.y = Math.sin(t * 3.3 + i * 2) * 0.6;
       if (t > flick[i] + 0.06) c.root.visible = false;
       if (t > flick[i] && t < flick[i] + 0.13) blk = 1;
     });
     s.fade = blk * 0.92;
-    // le monstre se rapproche entre chaque coupure
-    const n = flick.filter(f => t > f + 0.06).length;
-    w.monster.setPose(n % 2 ? P_REACH : mixPose(P_REST, P_REACH, 0.5));
-    w.monster.root.position.z = n * 2.2; w.monster.root.rotation.y = (n % 3 - 1) * 0.2;
+    const ph = monsterWalk(w.monster, t, 11.3, 14.1, [0, 0], [-3, 26], { step: 7, ease: k => k, hold: true, headYaw: Math.sin(t * 2.2) * 0.4, headPitch: 0.45 });
+    // à chaque disparition, la main droite se tend brusquement
+    const grab = Math.max(...flick.map(f => pulse(t, f - 0.1, f + 0.3, 0.12)));
+    if (grab > 0) { const p = w.monster.pose; w.monster.setPose({ ...p, armR: lerp3(p.armR, [-1.5, 0, 0.1], grab).concat([lerp(p.armR[3], -0.1, grab)]), curlR: grab }); }
     w.monster.eyes(0.8);
-    w.setCam(lerp3([16, 4.5, 66], [10, 5, 62], range(t, 11.3, 14.1)), [-2, 9, 44], 56);
+    w.setCam(lerp3([16, 5, 70], [10, 6, 66], range(t, 11.3, 14.1)), [-2, lerp(13, 17, range(t, 11.3, 14.1)), 30], 58);
     s.counter = { n: n, a: range(t, 11.9, 12.1) * (1 - range(t, 13.9, 14.1)) };
   } },
   // 14.34 « But something strange happened when daylight touched its body. » 17.70 « It froze completely. »
   { at: 14.1, name: 'Le lever du soleil fige le monstre', run(w, t, s) {
+
     const d1 = smooth(range(t, 14.1, 16.3)), d2 = smooth(range(t, 15.6, 17.6));
     s.preset = d2 > 0 ? ['dawn', 'day', d2] : ['night', 'dawn', d1]; s.night = 1 - d1;
     s.sepia = 0.25 * (1 - d1);
     w.towers.forEach(tw => (tw.root.visible = false)); w.fence.visible = false; show(w.guards, false); w.cable.visible = false; w.panel.visible = false; w.cars.forEach(c => (c.root.visible = false));
     setCityLights(w, t, 1 - d1);
-    // le monstre avance vers un passant tombé... puis se fige net à 17.70
+    // le monstre marche vers un passant tombé, tête basse, main tendue… et se fige net à 17.72 en pleine foulée
     const tt = Math.min(t, 17.72), freeze = t >= 17.72;
-    w.monster.root.position.z = lerp(0, 3.5, range(tt, 14.1, 17.72));
-    w.monster.setPose(mixPose(P_FROZEN, P_REACH, smooth(range(tt, 14.1, 17.4))));
-    if (!freeze) w.monster.spine.rotation.z = Math.sin(tt * 4) * 0.05;
-    const v = w.civilians[0]; v.root.visible = true; v.place(3, 21, Math.PI).setFace('scared');
-    v.root.rotation.x = -0.5; v.root.position.y = 0.4; v.legL.rotation.x = -1.4; v.legR.rotation.x = -1.2; v.armL.rotation.x = -2.2; v.armR.rotation.x = -0.4;
-    if (!freeze) v.armL.rotation.x += Math.sin(t * 9) * 0.2;
+    const reach = smooth(range(tt, 14.1, 17.6));
+    const base = mixPose(P_FROZEN, P_REACH, reach);
+    monsterWalk(w.monster, tt, 14.1, 17.9, [0, -6], [0, 4.5], { step: 6.5, ease: k => k, hold: true, base, headPitch: lerp(0.2, 0.55, reach), headYaw: Math.sin(tt * 1.6) * 0.15 });
+    // le passant rampe à reculons
+    const v = w.civilians[0]; v.root.visible = true; v.setFace('scared');
+    const crawl = Math.min(t, 17.72);
+    v.place(3, 19 + range(crawl, 14.1, 17.72) * 4, Math.PI);
+    v.root.rotation.x = -0.5; v.root.position.y = 0.4;
+    v.legL.rotation.x = -1.4 + Math.sin(crawl * 7) * 0.25; v.legR.rotation.x = -1.2 - Math.sin(crawl * 7) * 0.25;
+    v.armL.rotation.x = -2.2 + (freeze ? 0 : Math.sin(t * 9) * 0.2); v.armR.rotation.x = -0.4 + Math.cos(crawl * 7) * 0.3;
+    v.neck.rotation.y = freeze ? Math.sin(t * 2) * 0.3 : 0;
     const zoom = freeze ? easeOut(range(t, 17.72, 18.1)) : 0;
-    w.setCam(lerp3([14, 5, 52], [9, 6, 42], easeInOut(range(t, 14.1, 17.7))), [0, lerp(18, 26, zoom), 2], lerp(52, 32, zoom));
+    w.setCam(lerp3([14, 5, 52], [9, 6, 40], easeInOut(range(t, 14.1, 17.7))), [0, lerp(18, 27, zoom), 3], lerp(52, 32, zoom));
+    if (!freeze) w.shake(0.12 * Math.abs(Math.sin(w.monster.pose.twist * 8)), t, 8); // chaque pas fait trembler le sol
     if (freeze) { s.flash = 0.45 * (1 - range(t, 17.72, 18.2)); s.sat = lerp(0.4, 1.1, range(t, 17.8, 18.9)); w.shake(0.25 * (1 - range(t, 17.72, 18.3)), t); }
   } },
   // 19.28 « That's when we discovered its only weakness. » 21.82 « Light. »
   { at: 19.0, name: 'Sa seule faiblesse : la lumière', run(w, t, s) {
+
     s.preset = ['day', 'day', 0]; s.night = 0;
     w.towers.forEach(tw => (tw.root.visible = false)); w.fence.visible = false; show(w.guards, false); w.cable.visible = false; w.panel.visible = false; w.cars.forEach(c => (c.root.visible = false));
-    w.monster.root.position.z = 3.5; w.monster.setPose(P_REACH);
-    // deux scientifiques s'approchent prudemment
+    w.monster.root.position.z = 4.5; w.monster.setPose({ ...P_REACH, head: [0.55, 0.15, 0] });
+    // deux scientifiques s'approchent prudemment ; à « Light » l'un braque une torche sur lui
     show([w.civilians[1], w.civilians[2]], true);
-    [1, 2].forEach((i, j) => { const c = w.civilians[i], z = lerp(36, 24, range(t, 19, 22)); c.place(-4 + j * 6, z, Math.PI).walk(t * 4 + j, 0.35).setFace('worried'); });
+    [1, 2].forEach((i, j) => {
+      const c = w.civilians[i], k = range(t, 19, 21.3), z = lerp(38, 26, k);
+      c.place(-4 + j * 7, z, Math.PI).setFace('worried');
+      if (k < 1) c.walk(t * 4.5 + j, 0.4); else c.idle(t);
+      c.neck.rotation.x = -0.45; c.neck.rotation.y = Math.sin(t * 1.5 + j) * 0.2;
+    });
+    const up = seg(t, 21.5, 21.85);
+    const c1 = w.civilians[1]; c1.setFlashlight(up); c1.aim('R', lerp(0.9, -0.55, up));
+    const c2 = w.civilians[2]; c2.aim('L', lerp(1.2, -0.7, seg(t, 20.2, 20.7)));
+    crowd(w, t);
     const a = lerp(-0.5, 0.35, easeInOut(range(t, 19, 22.5)));
     const flash = t > 21.82 ? 1 - range(t, 21.82, 22.4) : 0;
-    w.setCam([Math.sin(a) * 26, lerp(14, 20, range(t, 19, 22.5)), 3.5 + Math.cos(a) * 26], [0, 30, 3], lerp(50, 40, flash > 0 ? 1 : 0));
+    w.setCam([Math.sin(a) * 26, lerp(14, 20, range(t, 19, 22.5)), 4.5 + Math.cos(a) * 26], [0, 30, 4.5], lerp(50, 40, flash > 0 ? 1 : 0));
     s.flash = flash * 0.85; s.bloom = 0.6 + flash * 1.5;
   } },
   // 22.60 « The government immediately installed six enormous floodlights around it, each with its own backup generator. »
@@ -295,6 +412,7 @@ export const SHOTS = [
     });
     w.fence.visible = t > 23.1; w.fence.scale.y = Math.max(0.01, easeOut(range(t, 23.1, 23.7)));
     w.cable.visible = t > 27.2; w.panel.visible = t > 27.2;
+    crowd(w, t);
     // grue caméra en orbite
     const a = lerp(0.25, 1.35, easeInOut(range(t, 22.5, 28.8)));
     const r = t < 26.3 ? 82 : lerp(82, 46, easeInOut(range(t, 26.3, 28.8)));
@@ -326,60 +444,95 @@ export const SHOTS = [
   } },
   // 38.56 « My dad is the head of security, and for the first time he allowed me to join his night shift. »
   { at: 38.4, name: 'Papa et moi', run(w, t, s) {
+
     show([w.kid, w.dad], true);
-    const z = lerp(46, 27, range(t, 38.4, 43.4));
+    const z = lerp(46, 27.5, range(t, 38.4, 43.4));
     w.dad.place(-2.2, z, Math.PI).walk(t * 5, 0.6); w.kid.place(1.4, z + 0.6, Math.PI).walk(t * 6.2, 0.75);
     w.dad.setFace('serious'); w.kid.setFace('smile');
-    if (t > 40.48 && t < 41.3) { const j = Math.sin(range(t, 40.48, 41.1) * Math.PI); w.kid.body.position.y += j * 1.4; w.kid.armL.rotation.x = w.kid.armR.rotation.x = -2.8 * j; }
+    // le père tourne la tête vers son fils en parlant, le fils sautille de joie à « first time »
+    w.dad.neck.rotation.y = -0.45 * pulse(t, 38.7, 40.3, 0.3);
+    w.kid.neck.rotation.y = 0.4 * pulse(t, 39.2, 40.4, 0.3);
+    if (t > 40.6 && t < 41.5) { const j = Math.sin(range(t, 40.6, 41.3) * Math.PI); w.kid.body.position.y += j * 1.5; w.kid.armL.rotation.x = w.kid.armR.rotation.x = -2.8 * j; w.kid.setFace('shout'); }
     w.dad.setFlashlight(1); w.dad.armR.rotation.x = -0.9; w.kid.setFlashlight(1); w.kid.armR.rotation.x = -0.9;
-    if (t < 40.8) { // travelling avant (on voit les visages)
-      w.setCam([1.8, 5.6, z - 12.5], [-0.3, 4.0, z], 46); w.key.position.set(2, 9, z - 10); w.key.target.position.set(0, 4, z); w.key.intensity = 40;
-      
-    } else { // par-dessus l'épaule : révélation du monstre
+    // en arrivant, le père montre le monstre ; le garçon lève les yeux
+    const pt = seg(t, 41.6, 42.1) * (1 - seg(t, 43.0, 43.5));
+    w.dad.armL.rotation.set(lerp(w.dad.armL.rotation.x, -2.4, pt), 0, 0);
+    w.kid.neck.rotation.x = -0.5 * seg(t, 41.8, 42.4);
+    if (t < 40.8) { // travelling arrière devant eux
+      w.setCam([1.8, 5.6, z - 12.5 + range(t, 38.4, 40.8) * 1.5], [-0.3, 4.0, z], 46); w.key.position.set(2, 9, z - 10); w.key.target.position.set(0, 4, z); w.key.intensity = 40;
+    } else { // grue par-dessus l'épaule : révélation du monstre
       const k = easeInOut(range(t, 40.8, 43.6));
-      w.setCam([lerp(-4, 3, k), lerp(5, 7, k), z + 10], [0, lerp(10, 22, k), 0], 52);
+      w.setCam([lerp(-5, 4, k), lerp(6.5, 12, k), z + lerp(11, 15, k)], [0, lerp(8, 24, k), 0], 52);
     }
   } },
   // 43.76 « Everything was quiet until 2 a.m. »
   { at: 43.6, name: '2 heures du matin', run(w, t, s) {
+
     atPost(w, t, { kidFace: 'smile' });
-    w.kid.setFlashlight(1); w.dad.setFlashlight(1); aimAt(w.kid, V(0, 4, 0)); aimAt(w.dad, V(0, 4, 0));
+    // nuit calme : le garçon s'étire et bâille, le père regarde sa montre
+    const yawn = pulse(t, 43.9, 45.0, 0.3);
+    w.kid.armL.rotation.set(-2.9 * yawn, 0, -0.3 * yawn); w.kid.armR.rotation.set(-2.9 * yawn, 0, 0.3 * yawn); w.kid.hip.rotation.x = -0.15 * yawn;
+    if (yawn > 0.5) w.kid.setFace('scared');
+    w.kid.setFlashlight(1 - yawn);
+    const watch = pulse(t, 44.7, 45.9, 0.25);
+    w.dad.armL.rotation.set(-1.5 * watch, 0.9 * watch, 0); w.dad.neck.rotation.x = -0.25 + 0.55 * watch; w.dad.neck.rotation.y = -0.3 * watch;
+    w.dad.setFlashlight(1); aimAt(w.dad, V(0, 4, 0));
     const k = range(t, 43.6, 46.05);
-    w.setCam(lerp3([-8, 26, 64], [-6, 22, 56], k), [0, 14, 4], 50);
+    w.setCam(lerp3([-10, 24, 62], [-3, 12, 40], easeInOut(k)), lerp3([0, 14, 4], [0, 5, 25], easeInOut(k)), lerp(50, 46, k));
     s.clock = { text: '2:00 AM', a: range(t, 44.8, 45.1) * (1 - range(t, 45.9, 46.05)) };
   } },
   // 46.18 « Boom! » 47.38 « One of the massive floodlights exploded. »
   { at: 46.05, name: 'BOOM – un projecteur explose', run(w, t, s) {
+
     atPost(w, t, { kidFace: t > 46.25 ? 'scared' : 'smile', dadFace: t > 46.25 ? 'worried' : 'serious' });
     w.kid.setFlashlight(1); w.dad.setFlashlight(1);
     const tw = w.towers[0], lens = tw.lensWorld;
-    if (t > 46.25) { w.kid.face(lens.x, lens.z); w.dad.face(lens.x, lens.z); w.kid.neck.rotation.x = w.dad.neck.rotation.x = -0.6; w.kid.panic(t); }
     const e = t - 46.18;
+    // le souffle projette le garçon au sol ; le père se baisse et le protège de son bras
+    const fall = easeOut(range(t, 46.22, 46.6));
+    if (t > 46.2) {
+      const hd = Math.atan2(lens.x - POST_KID[0], lens.z - POST_KID[1]);
+      w.kid.place(POST_KID[0] - 0.8 * fall, POST_KID[1] + 1.2 * fall, hd, 0.5 * fall); w.kid.root.rotation.x = -1.35 * fall;
+      w.kid.legL.rotation.x = -1.3 * fall; w.kid.legR.rotation.x = -0.9 * fall; w.kid.flinch(fall);
+      w.dad.face(lens.x, lens.z); w.dad.crouch(seg(t, 46.2, 46.45) * (1 - seg(t, 47.6, 48.4)));
+      w.dad.armR.rotation.set(-1.6, -0.6, 0); w.dad.neck.rotation.x = -0.5;
+    }
     w.sparks.sparks(t, 46.18, lens, { speed: 20, life: 2.4 });
     w.glass.sparks(t, 46.2, lens, { speed: 8, life: 3, gravity: 18 });
     w.blast.position.copy(lens); w.blast.intensity = e > 0 ? 3000 * Math.max(0, 1 - e / 0.9) : 0;
     if (e > 0) { s.flash = 0.75 * Math.max(0, 1 - e / 0.35); w.smoke.smoke(t, lens, { rate: 0.6, height: 16, spread: 3, on: Math.min(1, e) }); }
+    // les gardes les plus proches courent vers la tour
+    [0, 1, 11].forEach((gi, j) => { const g = w.guards[gi]; if (t > 46.5) { const k = range(t, 46.5 + j * 0.1, 49.4); const p = g.root.position; g.reset(); g.place(lerp(p.x, 12.5 + j * 1.5, k), lerp(p.z, 23 - j, k), 0).face(15, 26).run(t * 12 + j); g.setFlashlight(1); g.aim('R', -0.6); g.setFace('shout'); } });
     if (t < 47.3) {
       const whip = easeInOut(range(t, 46.15, 46.45));
-      const tgt = lerp3([0, 7, 25], [lens.x, lens.y - 2, lens.z], whip);
+      const tgt = lerp3([0, 5, 25], [lens.x, lens.y - 2, lens.z], whip);
       w.setCam([-6, 4.5, 37], tgt, lerp(46, 34, whip));
       w.shake(e > 0 ? 1.4 * Math.max(0, 1 - e / 1.1) : 0, t, 25);
-    } else {
-      const k = range(t, 47.3, 49.45);
-      w.setCam(lerp3([2, 30, 42], [5, 33, 38], k), [lens.x, lens.y - 1, lens.z], 34);
+    } else { // zoom progressif sur le projecteur éventré
+      const k = easeInOut(range(t, 47.3, 49.45));
+      w.setCam(lerp3([-2, 26, 46], [6, 32, 37], k), [lens.x, lens.y - 1, lens.z], lerp(40, 26, k));
       w.shake(0.12, t);
     }
   } },
   // 49.66 « Dad stayed calm. » 50.96 « "We still have five," he said. »
   { at: 49.45, name: '« Il en reste cinq »', run(w, t, s) {
+
     atPost(w, t, { kidFace: 'scared', dadFace: 'serious', lookMonster: false });
-    w.dad.face(POST_KID[0], POST_KID[1] + 6); w.kid.face(POST_DAD[0], POST_DAD[1] + 2);
-    w.dad.setFlashlight(1); w.dad.armR.rotation.x = -0.8;
-    // il lève la main gauche : « cinq »
-    const up = seg(t, 50.9, 51.4) * (1 - seg(t, 52.4, 52.9));
+    // le père aide son fils à se relever, puis lève la main : « cinq »
+    const lift = smooth(range(t, 49.7, 50.7));
+    w.kid.place(POST_KID[0] - 0.8, POST_KID[1] + 1.2, 0).face(POST_DAD[0], POST_DAD[1]);
+    w.kid.root.rotation.x = -1.35 * (1 - lift); w.kid.root.position.y = 0.5 * (1 - lift);
+    w.kid.legL.rotation.x = -1.3 * (1 - lift); w.kid.legR.rotation.x = -0.9 * (1 - lift);
+    w.kid.armR.rotation.set(-1.4 * (1 - seg(t, 50.7, 51.1)), 0, 0);
+    w.dad.face(POST_KID[0] - 0.8, POST_KID[1] + 1.2);
+    w.dad.crouch(0.6 * (1 - lift)); w.dad.armR.rotation.set(lerp(-1.5, -0.6, seg(t, 50.7, 51.0)), 0, 0); w.dad.setFlashlight(0);
+    if (t > 50.8) { w.dad.face(1, 40); }
+    const up = seg(t, 50.9, 51.3) * (1 - seg(t, 52.4, 52.9));
     w.dad.armL.rotation.set(lerp(-0.05, -2.7, up), 0, lerp(-0.05, -0.25, up));
     w.dad.neck.rotation.y = Math.sin(t * 1.3) * 0.08;
-    portrait(w, w.dad, { dist: 7.5, side: 0.55, h: 0.2, fov: 42, look: [1.2, -0.4, 0], push: 1.5 * range(t, 49.45, 52.9) });
+    const k = easeInOut(range(t, 49.45, 52.9));
+    w.setCam(lerp3([12, 4.4, 30], [6, 5.6, 32], k), lerp3([-0.8, 2.6, 26.2], [-2.2, 5, 25.4], k), lerp(46, 38, k));
+    w.key.position.set(7, 9, 31); w.key.target.position.set(-1, 3.5, 26); w.key.intensity = 32;
     w.smoke.smoke(t, w.towers[0].lensWorld, { rate: 0.6, height: 16, spread: 3, on: 1 });
   } },
   // 53.14 « Then his radio suddenly crackled. »
@@ -396,28 +549,40 @@ export const SHOTS = [
   } },
   // 55.22 « Chief, the main power cable is damaged. We need to shut down the system. »
   { at: 55.1, name: 'Le câble principal est endommagé', run(w, t, s) {
+
+    // le garde arrive en courant, s'accroupit près du câble qui crache des étincelles, et appelle à la radio
     const g = w.guards[CABLE_GUARD]; g.root.visible = true; g.reset();
-    g.place(-39.2, 50.4, 0).face(-36.5, 47.6).idle(t); g.setFace('worried');
-    g.armL.rotation.set(-2.2, 0, 0.7); g.setFlashlight(1); aimAt(g, V(-36.5, 0.3, 47.6));
+    const k0 = smooth(range(t, 55.1, 56.4));
+    g.place(lerp(-46, -39.2, k0), lerp(54, 50.4, k0), 0);
+    if (k0 < 1) { g.face(-39.2, 50.4); g.run(t * 12); } else { g.face(-36.5, 47.6).idle(t); g.crouch(seg(t, 56.4, 56.8)); g.armL.rotation.set(-2.2, 0, 0.7); aimAt(g, V(-36.5, 0.3, 47.6)); }
+    g.setFace('worried'); g.setFlashlight(1);
+    if (t > 56.9) g.flinch(0.5 * pulse(t, 57.6, 58.2, 0.1));
     const dmg = V(-36.5, 0.6, 47.6);
     const cyc = Math.floor((t - 55.1) / 0.55), t0 = 55.1 + cyc * 0.55;
     w.cableSparks.sparks(t, t0, dmg, { speed: 9, life: 0.55, gravity: 30 });
     w.fill.color.set('#9fd0ff'); w.fill.position.copy(dmg).add(V(0, 1, 0)); w.fill.intensity = 60 * Math.max(0, 1 - (t - t0) / 0.3);
     const k = easeInOut(range(t, 55.1, 59.2));
-    w.setCam(lerp3([-30.5, 1.8, 51.5], [-31.5, 3, 53.5], k), lerp3([-36.5, 1, 47.6], [-38.5, 3.6, 50.2], k), 46);
-    w.key.position.set(-31, 8, 54); w.key.target.position.set(-38.5, 3, 50.2); w.key.intensity = 35;
-    if (t > 57.9) s.label = { text: 'SHUT DOWN?!', a: 0 };
+    w.setCam(lerp3([-27, 2.6, 54], [-29.5, 3, 54.5], k), lerp3([-38, 2, 49.5], [-37.5, 2.2, 49], k), lerp(46, 40, k));
+    w.key.position.set(-31, 8, 54); w.key.target.position.set(-38.5, 2, 50.2); w.key.intensity = 35;
   } },
   // 59.42 « The backup generators were overheating, too. »
   { at: 59.2, name: 'Les générateurs surchauffent', run(w, t, s) {
+
     const tw = w.towers[5], gp = tw.gen.root.getWorldPosition(new THREE.Vector3());
     w.towers.forEach(x => x.gen.heat(1, t));
     w.smoke.smoke(t, gp.clone().add(V(0, 2.5, 0)), { rate: 1.2, height: 10, spread: 2, on: 1 });
     const k = range(t, 59.2, 61.8);
     const dir = V(-Math.sin(tw.angle), 0, -Math.cos(tw.angle)), side = V(dir.z, 0, -dir.x);
-    const cp = gp.clone().addScaledVector(dir, 6.5 - k * 1.5).addScaledVector(side, 3.5);
+    const cp = gp.clone().addScaledVector(dir, 6.5 - k * 2).addScaledVector(side, 3.5 - k * 1.5);
+    // un garde arrive en courant et recule devant la chaleur
+    const g = w.guards[10]; g.reset(); g.root.visible = true;
+    const rk = smooth(range(t, 59.3, 60.6));
+    const gpos = gp.clone().addScaledVector(side, lerp(-9, -2.2, rk)).addScaledVector(dir, 2.2);
+    g.place(gpos.x, gpos.z, 0).face(gp.x, gp.z);
+    if (rk < 1) g.run(t * 12); else { g.flinch(0.8 * pulse(t, 60.7, 61.8, 0.15)); g.setFace('scared'); }
+    g.setFlashlight(1);
     w.fill.color.set('#ff2a10'); w.fill.position.copy(gp).addScaledVector(dir, 2).add(V(0, 3, 0)); w.fill.intensity = 25 * (Math.sin(t * 12) > 0 ? 1 : 0.2);
-    w.setCam([cp.x, 2.6 + k, cp.z], [gp.x, 1.6, gp.z], 46);
+    w.setCam([cp.x, 2.6 + k, cp.z], [gp.x, 1.8, gp.z], lerp(48, 40, k));
     w.shake(0.04, t, 30);
   } },
   // 61.96 « Dad immediately ordered everyone into emergency positions. »
@@ -518,7 +683,7 @@ export const SHOTS = [
     if (t < 86.0) {
       w.setCam(lerp3([15, 2.6, 12.5], [14.5, 3, 13.5], range(t, 83.95, 86)), [gx, 2.6, gz], 46);
     } else {
-      w.setCam(lerp3([16.5, 1.8, 17], [15.5, 1.4, 18], range(t, 86, 88.75)), [11.6, 0.5, 21.8], 38);
+      w.setCam(lerp3([17.5, 3.4, 20.5], [16.5, 2.6, 21], range(t, 86, 88.75)), [11.4, 0.5, 21.6], 40);
     }
     s.bloom = 0.8;
   } },
@@ -572,38 +737,66 @@ export const SHOTS = [
   } },
   // 98.88 « For one terrifying second, the monster was completely in darkness. »
   { at: 98.75, name: 'Dans le noir…', run(w, t, s) {
+
     atPost(w, t, { kidFace: 'scared', dadFace: 'worried' });
     // toutes les torches ont dévié : plus aucune ne touche le monstre
-    w.guards.forEach((g, i) => { g.setFlashlight(1); g.armR.rotation.x = -0.25; g.armR.rotation.y = (i % 2 ? 1 : -1) * 0.8; });
-    w.kid.place(POST_KID[0], 20.4, Math.PI); w.kid.root.rotation.x = 1.45; w.kid.root.position.y = 0.55; w.kid.armL.rotation.x = w.kid.armR.rotation.x = -2.6;
+    w.guards.forEach((g, i) => { if (i === SLIP_GUARD || i === HELP_GUARD) return; g.setFlashlight(1); g.armR.rotation.x = -0.25; g.armR.rotation.y = (i % 2 ? 1 : -1) * 0.8 + Math.sin(t * 2 + i) * 0.3; g.neck.rotation.y = Math.sin(t * 3 + i) * 0.6; });
+    w.kid.place(POST_KID[0], 20.4, Math.PI); w.kid.root.rotation.x = 1.45; w.kid.root.position.y = 0.55; w.kid.armL.rotation.x = -2.6; w.kid.armR.rotation.x = -2.6 + Math.sin(t * 6) * 0.2;
+    w.kid.neck.rotation.x = -0.9; // il relève la tête vers le monstre
     w.kidLight.visible = true; w.kidLight.position.set(-3.5, 0.5, 13.5); w.kidLight.rotation.set(0, Math.atan2(-5.1, -6.3) + Math.PI / 2, -0.05);
     w.kidBeam.material.uniforms.opacity.value = 0.12; w.kidLens.emissiveIntensity = 2;
+    w.dad.armR.rotation.x = -0.3; w.dad.setFlashlight(1); w.dad.neck.rotation.y = Math.sin(t * 2.5) * 0.5;
     const dark = t > 99.0 ? 1 : 0;
     w.cars.forEach(c => c.set(t, { siren: 0.25, head: 0 }));
-    s.ambient = 0.25; s.exposure = 0.55;
-    // le monstre bouge dans le noir — révélé par un éclair à ~100.4
-    const m = range(t, 99.2, 101.6);
-    w.monster.root.position.set(0, 0, lerp(0, MONSTER_FRONT[2], easeInOut(m)));
-    w.monster.setPose(t < 99.2 ? P_FROZEN : (m < 1 ? walkPose(t * 4) : P_CROUCH));
+    s.ambient = 0.3; s.exposure = 0.6;
+    // dans le noir, le monstre marche droit sur nous — un éclair (100.42) le révèle en pleine foulée
+    if (t < 99.1) w.monster.setPose(P_FROZEN);
+    else if (t < 101.7) monsterWalk(w.monster, t, 99.1, 101.7, [0, 0], [MONSTER_FRONT[0], MONSTER_FRONT[2]], { step: 5, ease: k => k, hold: true, headYaw: Math.sin(t * 1.8) * 0.35, headPitch: 0.3 });
+    else { w.monster.root.position.set(...MONSTER_FRONT); w.monster.setPose(mixPose(stride(9 / 5 * Math.PI, { headPitch: 0.3 }), P_CROUCH, smooth(range(t, 101.7, 102.3)))); }
     w.monster.eyes(dark * (0.7 + 0.3 * Math.sin(t * 9)));
     const k = range(t, 98.75, 102.35);
-    w.setCam(lerp3([1.2, 2, 27], [1.6, 1.6, 25], k), [0, lerp(22, 26, k), 0], lerp(52, 44, k));
+    w.setCam(lerp3([1.2, 2, 27], [1.8, 1.5, 24.5], k), [0, lerp(22, 25, k), lerp(0, 8, k)], lerp(52, 44, k));
+    w.key.position.set(4, 5, 26); w.key.target.position.set(1.6, 1, 20.4); w.key.intensity = 10;
     w.shake(0.05 + 0.08 * Math.max(0, Math.sin(t * 7)), t, 6); // battements de cœur
     s.vignette = 1.8;
   } },
   // 102.54 « A blood-curdling scream shattered the silence. »
   { at: 102.35, name: 'Un cri', run(w, t, s) {
-    s.ambient = 0.2; s.exposure = 0.6;
-    const g = w.guards[GRAB_GUARD], [gx, gz] = EMERG[GRAB_GUARD];
-    // le garde est arraché vers le haut, sa lampe tombe
-    const yank = easeIn(range(t, 102.6, 102.95));
-    g.root.visible = yank < 1; g.reset(); g.place(gx, gz, 0).face(0, 0); g.root.position.y = yank * 14; g.panic(t); g.setFace('scared');
-    w.monster.eyes(0.8);
+
+    s.ambient = 0.35; s.exposure = 0.7;
+    // LA SAISIE : la main géante descend, les griffes se referment sur le garde et l'arrachent du sol
+    const M = w.monster, g = w.guards[GRAB_GUARD], [gx, gz] = EMERG[GRAB_GUARD];
+    M.root.position.set(...MONSTER_FRONT);
+    const target = V(gx, 3.6, gz);
+    const REACH = reachPose(M, P_CROUCH, target);
+    const down = smooth(range(t, 102.4, 102.72)), lift = smooth(range(t, 102.85, 103.6));
+    let pose = mixPose(P_CROUCH, { ...REACH, curlR: 0 }, down);
+    pose.curlR = lerp(lerp(0.85, 0, down), 0.9, smooth(range(t, 102.72, 102.85)));
+    if (t > 102.85) pose = mixPose({ ...REACH, curlR: 0.9 }, P_CROUCH, lift);
+    pose.head = [lerp(-0.22, 0.35, down * (1 - lift)), -0.25 * down * (1 - lift), 0.1];
+    M.setPose(pose); M.eyes(0.9);
+    if (t < 102.8) {
+      g.root.visible = true; g.reset(); g.place(gx, gz, 0).face(0, 0).idle(t);
+      g.setFlashlight(1); g.armR.rotation.x = -0.3; g.armR.rotation.y = 0.8;
+      g.neck.rotation.x = -0.9 * seg(t, 102.45, 102.7); g.setFace(t > 102.55 ? 'scared' : 'serious');
+      g.flinch(seg(t, 102.6, 102.78));
+    } else holdGuard(w, t);
     const from = V(gx + 0.6, 4, gz), to = V(gx + 2.5, 0.55, gz + 2);
-    flyLight(w.dropLight, w.dropLens, w.dropBeam, t, 102.62, 103.3, from, to, { spin: 6, on: 1, height: 1.5 });
-    if (t > 103.3) { w.dropLight.rotation.y += (t - 103.3) * 0.6; }
-    w.key.position.set(gx + 6, 6, gz + 6); w.key.target.position.set(gx, 0.5, gz); w.key.intensity = 18;
-    w.setCam(lerp3([gx + 7, 1.4, gz + 6], [gx + 6, 1.8, gz + 5], range(t, 102.35, 104.85)), [gx + 1.2, 1.2, gz + 1.2], 46);
+    flyLight(w.dropLight, w.dropLens, w.dropBeam, t, 102.85, 103.5, from, to, { spin: 6, on: 1, height: 1.5 });
+    if (t > 103.5) { w.dropLight.rotation.y += (t - 103.5) * 0.6; }
+    // les voisins sursautent
+    [w.guards[6], w.guards[8]].forEach(x => x.flinch(seg(t, 102.8, 103.0)));
+    w.guards[1].root.visible = false; w.guards[HELP_GUARD].root.visible = false;
+    w.key.position.set(gx + 10, 9, gz + 2); w.key.target.position.set(gx, 6, gz); w.key.angle = 0.6; w.key.intensity = 70;
+    // caméra : plan large latéral, puis elle suit le garde emporté vers le haut
+    if (t < 102.85) {
+      w.setCam(lerp3([gx + 14, 4, gz - 1], [gx + 14.5, 4.3, gz - 1.5], range(t, 102.35, 102.85)), [gx - 2, 8, gz - 2], 60);
+    } else {
+      const gp = w.guards[GRAB_GUARD].root.getWorldPosition(new THREE.Vector3()).add(V(0, 3, 0));
+      const k2 = easeOut(range(t, 102.85, 104.85));
+      w.setCam([gp.x + lerp(14, 11, k2), lerp(4.3, gp.y - 1, k2), gp.z + lerp(-1.5, 5, k2)], [gp.x, gp.y + 1, gp.z], lerp(60, 48, k2));
+      w.key.position.set(gp.x + 9, gp.y, gp.z + 6); w.key.target.position.copy(gp);
+    }
     s.red = 0.35 * pulse(t, 102.7, 104.4, 0.2); w.shake(0.5 * pulse(t, 102.8, 104.3, 0.2), t, 30);
   } },
   // 104.92 « Everyone immediately pointed their lights back at it. »
@@ -639,10 +832,15 @@ export const SHOTS = [
   } },
   // 113.06 « It was right in front of us, » 114.96 « and in its enormous hand »
   { at: 113.0, name: 'Juste devant nous', run(w, t, s) {
-    atPost(w, t, { kidFace: 'scared', dadFace: 'worried' }); w.dad.setFlashlight(1); w.kid.setFlashlight(1); aimAt(w.dad, monsterChest(w)); aimAt(w.kid, monsterChest(w));
-    w.kid.place(POST_KID[0], 23.5, Math.PI); aimAt(w.kid, monsterChest(w));
+
+    atPost(w, t, { kidFace: 'scared', dadFace: 'worried' }); w.dad.setFlashlight(1); w.kid.setFlashlight(1);
+    // le garçon recule lentement, le père tend le bras devant lui
+    const back = range(t, 113.3, 116.6);
+    w.kid.place(POST_KID[0], lerp(23.5, 25.2, back), Math.PI); w.kid.walk(t * 4, 0.25 * (back > 0 && back < 1 ? 1 : 0));
+    aimAt(w.dad, monsterChest(w)); aimAt(w.kid, monsterChest(w));
+    w.dad.armL.rotation.set(-1.4 * seg(t, 113.8, 114.3), 0.6, 0);
     const tilt = easeInOut(range(t, 113.4, 115.4));
-    w.setCam([1.2, lerp(4.8, 3.2, tilt), 34], lerp3([0, 4.5, 24], [0, 22, 14], tilt), lerp(42, 60, tilt));
+    w.setCam([1.2, lerp(4.8, 3.2, tilt), lerp(34, 35, tilt)], lerp3([0, 4.5, 24], [0, 22, 14], tilt), lerp(42, 60, tilt));
     w.shake(0.12 * pulse(t, 114.0, 115.6, 0.3), t, 10); underlight(w, tilt);
   } },
   // 116.86 « was one of our guards, still breathing. »
@@ -655,28 +853,37 @@ export const SHOTS = [
   } },
   // 120.10 « Dad! We have to save him! »
   { at: 119.9, name: '« Papa ! Il faut le sauver ! »', run(w, t, s) {
+
     atPost(w, t, { kidFace: 'shout', dadFace: 'worried', lookMonster: false });
-    w.kid.place(POST_KID[0], 24.2, 0).face(POST_DAD[0] - 1, POST_DAD[1] + 2);
-    w.kid.armL.rotation.set(-1.6 + Math.sin(t * 8) * 0.15, 0.4, 0); w.kid.neck.rotation.x = -0.1;
+    // il fait deux pas vers le monstre en tendant le bras vers le garde
+    const step = smooth(range(t, 120.3, 121.4));
+    w.kid.place(POST_KID[0], lerp(24.4, 23.0, step), 0).face(POST_DAD[0] - 1, POST_DAD[1] + 2);
+    if (step > 0 && step < 1) { w.kid.walk(t * 9, 0.6); }
+    w.kid.armL.rotation.set(-1.6 + Math.sin(t * 8) * 0.15, 0.4, 0);
+    w.kid.setFlashlight(0);
+    if (t > 120.7) { w.kid.face(0, 0); w.kid.aim('R', -0.9); w.kid.neck.rotation.x = -0.4; } else w.kid.neck.rotation.x = -0.1;
     w.dad.setFlashlight(1); aimAt(w.dad, monsterChest(w));
-    portrait(w, w.kid, { dist: 5.5, side: 0.3, h: 0.3, fov: 42, push: 1.5 * easeOut(range(t, 119.9, 121)), light: 1.2 });
+    portrait(w, w.kid, { dist: 6, side: 0.3, h: 0.3, fov: 44, push: 1.5 * easeOut(range(t, 119.9, 121)), light: 0.6 });
     w.shake(0.05, t, 20);
   } },
   // 122.44 « But Dad grabbed my arm and whispered, » 124.38 « Don't move! »
   { at: 122.25, name: '« Ne bouge pas ! »', run(w, t, s) {
+
     atPost(w, t, { kidFace: 'scared', dadFace: 'serious', lookMonster: false });
-    w.kid.place(POST_KID[0], 24.2, 0).face(POST_DAD[0], POST_DAD[1]);
-    w.dad.face(POST_KID[0], 24.2); w.dad.setFlashlight(0);
-    const grab = seg(t, 122.8, 123.3);
-    w.dad.armL.rotation.set(lerp(-0.05, -1.35, grab), lerp(0, -0.35, grab), 0);
+    // le père attrape le bras du garçon et le tire vers lui
+    const grab = seg(t, 122.8, 123.25), pull = seg(t, 123.3, 123.9);
+    w.kid.place(lerp(POST_KID[0], POST_KID[0] - 0.6, pull), lerp(23.0, 24.4, pull), 0).face(lerp(0, POST_DAD[0], pull), lerp(0, POST_DAD[1], pull));
+    w.kid.hip.rotation.x = 0.25 * (1 - pull) * grab;
+    w.dad.face(w.kid.root.position.x, w.kid.root.position.z); w.dad.setFlashlight(0);
+    w.dad.armL.rotation.set(lerp(-0.05, -1.35, grab) + 0.3 * pull, lerp(0, -0.35, grab), 0);
     w.kid.armR.rotation.set(lerp(0, -0.6, grab), 0, 0);
+    w.dad.neck.rotation.x = 0.1 * seg(t, 123.6, 124.0);
     if (t < 124.2) {
       const k = range(t, 122.25, 124.2);
-      w.setCam(lerp3([5.5, 5.4, 22.2], [5, 5.2, 22.8], k), [-1.2, 4.1, 25.0], 42);
+      w.setCam(lerp3([6, 5.4, 21.8], [5, 5.0, 22.8], k), [-1.0, 4.1, 24.6], lerp(44, 38, k));
       w.key.position.set(5, 9, 22); w.key.target.position.set(-2.2, 4.5, 25.2); w.key.intensity = 30;
     } else {
       portrait(w, w.dad, { dist: 5.5, side: 0.3, h: 0.2, fov: 40, push: 2.4 * easeOut(range(t, 124.2, 125.4)), light: 1.2 });
-      w.dad.neck.rotation.x = 0.05;
     }
   } },
   // 125.74 « I couldn't understand why. » 127.38 « Then he pointed at the monster and said, »
@@ -700,18 +907,23 @@ export const SHOTS = [
   } },
   // 129.34 « Because if those lights go out again, he's already dead. »
   { at: 129.25, name: 'Final', run(w, t, s) {
-    const h = w.monster.head.getWorldPosition(new THREE.Vector3()).add(V(0, 3, 0));
-    const k = easeInOut(range(t, 129.25, 131.9));
-    w.setCam(lerp3([h.x + 1, h.y - 6, h.z + 22], [h.x + 0.3, h.y - 1, h.z + 9.5], k), [h.x, h.y, h.z], lerp(46, 34, k));
-    // les lumières vacillent... noir.
+
+    const M = w.monster;
+    // les lumières vacillent… et à chaque coupure, la tête du monstre se tourne un peu plus vers nous
     const fl = t > 131.25 ? (t > 131.95 ? 0 : (Math.floor(t * 18) % 2)) : 1;
+    const creep = range(t, 131.25, 132.3);
+    M.setPose({ ...P_CROUCH, head: [lerp(-0.22, 0.1, creep), lerp(-0.08, 0.35, creep), lerp(0.1, -0.2, creep)], armL: [lerp(-0.5, -1.2, creep), 0, -0.45, -0.9] });
+    M.root.position.z = MONSTER_FRONT[2] + 2.5 * creep;
+    if (t > 103.6) holdGuard(w, t);
+    const h = M.head.getWorldPosition(new THREE.Vector3()).add(V(0, 2.6, 0));
+    const k = easeInOut(range(t, 129.25, 131.9));
+    w.setCam(lerp3([1, 18, 33], [0.3, 23.5, 22.5], k), [h.x, h.y, h.z], lerp(46, 34, k));
     underlight(w, fl);
     w.towers.forEach((tw, i) => i && tw.set(fl * 0.8, false, '#ffc9a8'));
     w.guards.forEach(g => g.setFlashlight(fl));
     s.ambient = fl ? 1 : 0.15; s.exposure = fl ? 1 : 0.5;
-    w.monster.eyes(fl ? 0 : 1);
-    if (t > 131.95) s.fade = range(t, 132.1, 132.6) * 0.9 + 0.1;
-    if (t > 131.95) { w.monster.eyes(1); s.ambient = 0.05; }
+    M.eyes(fl ? 0 : 1);
+    if (t > 131.95) { s.fade = range(t, 132.1, 132.6) * 0.9 + 0.1; M.eyes(1); s.ambient = 0.05; }
   } },
 ];
 
@@ -725,7 +937,7 @@ function defaultEnv(t) {
 }
 
 // Éclairs (instants) — orage à partir de 82.6
-const STRIKES = [[82.58, 1], [83.05, 0.6], [86.9, 0.7], [92.3, 0.8], [96.0, 0.5], [100.42, 1], [103.2, 0.9], [109.9, 0.6], [115.0, 0.7], [121.4, 0.6], [126.9, 0.5], [131.6, 0.8]];
+const STRIKES = [[82.58, 1], [83.05, 0.6], [86.9, 0.7], [92.3, 0.8], [96.0, 0.5], [100.42, 1], [102.68, 1], [103.25, 0.7], [109.9, 0.6], [115.0, 0.7], [121.4, 0.6], [126.9, 0.5], [131.6, 0.8]];
 function lightningAt(t) {
   let v = 0, idx = -1;
   STRIKES.forEach(([ts, a], i) => { const e = t - ts; if (e >= 0 && e < 0.5) { const f = a * (e < 0.06 ? 1 : e < 0.12 ? 0.3 : e < 0.2 ? 0.8 : Math.max(0, 1 - e / 0.5) * 0.5); if (f > v) { v = f; idx = i; } } });
@@ -739,6 +951,7 @@ export function applyStory(w, t) {
   base(w, t, s);
   const i = shotAt(t);
   SHOTS[i].run(w, t, s);
+  if (!SHOTS[i].steady) handheld(w, t, SHOTS[i].hand ?? 1);
   // orage
   const [b, idx] = lightningAt(t);
   if (t > 82 && b > 0) {

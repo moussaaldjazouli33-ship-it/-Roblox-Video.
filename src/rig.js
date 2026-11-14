@@ -4,6 +4,7 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { faceTexture } from './textures.js';
 import { makeBeam } from './effects.js';
 
+const lerpN = (a, b, k) => a + (b - a) * k;
 const GEO = {
   head: new RoundedBoxGeometry(1.25, 1.2, 1.2, 4, 0.32),
   torso: new RoundedBoxGeometry(2, 2, 1, 3, 0.12),
@@ -14,7 +15,7 @@ GEO.limb.translate(0, -1, 0); // pivot en haut du membre (épaule / hanche)
 export class Rig {
   constructor({ skin = '#f5cd8a', shirt = '#1c1c22', pants = '#2c3550', shoes = '#1a1a1a', hair = null, hat = null, scale = 1, vest = null, face = 'smile' } = {}) {
     const M = c => new THREE.MeshStandardMaterial({ color: c, roughness: 0.55 });
-    this.root = new THREE.Group();
+    this.root = new THREE.Group(); this.root.rotation.order = 'YXZ'; // chute dans l'axe du personnage
     this.body = new THREE.Group(); this.root.add(this.body);
     const mk = (geo, mat, parent, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m); return m; };
     const skinM = M(skin), shirtM = M(shirt), pantsM = M(pants);
@@ -96,11 +97,32 @@ export class Rig {
   place(x, z, heading = 0, y = 0) { this.root.position.set(x, y, z); this.root.rotation.set(0, heading, 0); return this; }
   face(x, z) { this.root.rotation.y = Math.atan2(x - this.root.position.x, z - this.root.position.z); return this; }
   idle(t, k = 1) {
+    // respiration + transfert de poids + regard qui balaie
     const b = Math.sin(t * 2.2) * 0.04 * k;
     this.body.position.y = b; this.armL.rotation.z = -0.07 - b; this.armR.rotation.z = 0.07 + b;
-    this.neck.rotation.y = Math.sin(t * 0.7) * 0.15 * k;
+    this.body.rotation.z = Math.sin(t * 0.9) * 0.035 * k;
+    this.hip.rotation.y = Math.sin(t * 0.55) * 0.08 * k;
+    this.legL.rotation.z = -Math.max(0, Math.sin(t * 0.9)) * 0.06 * k; this.legR.rotation.z = Math.max(0, -Math.sin(t * 0.9)) * 0.06 * k;
+    this.neck.rotation.y = (Math.sin(t * 0.7) * 0.15 + Math.sin(t * 0.23 + 1) * 0.25) * k;
+    this.neck.rotation.x = Math.sin(t * 0.5) * 0.06 * k;
     return this;
   }
+  // accroupi (le R6 n'a pas de genoux : jambes vers l'avant, corps abaissé)
+  crouch(k) {
+    this.body.position.y -= 1.3 * k; this.hip.rotation.x += 0.35 * k;
+    this.legL.rotation.x = lerpN(this.legL.rotation.x, -1.25, k); this.legR.rotation.x = lerpN(this.legR.rotation.x, -1.1, k);
+    return this;
+  }
+  // sursaut : bras devant le visage, buste en arrière
+  flinch(k) {
+    if (k <= 0) return this;
+    this.armL.rotation.set(lerpN(this.armL.rotation.x, -2.3, k), 0, lerpN(this.armL.rotation.z, 0.7, k));
+    this.armR.rotation.set(lerpN(this.armR.rotation.x, -2.1, k), 0, lerpN(this.armR.rotation.z, -0.7, k));
+    this.hip.rotation.x -= 0.25 * k; this.neck.rotation.x += 0.35 * k; this.body.position.y -= 0.35 * k;
+    return this;
+  }
+  // tremblement de peur
+  shiver(t, k = 1) { this.body.position.x = Math.sin(t * 47) * 0.04 * k; this.neck.rotation.z = Math.sin(t * 39) * 0.04 * k; return this; }
   walk(phase, amp = 0.7) {
     const s = Math.sin(phase);
     this.legL.rotation.x = s * amp; this.legR.rotation.x = -s * amp;

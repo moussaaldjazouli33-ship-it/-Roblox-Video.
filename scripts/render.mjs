@@ -20,7 +20,7 @@ await Promise.all(Array.from({ length: WORKERS }, async (_, w) => {
   const a = w * per, b = Math.min(total, a + per); if (a >= b) return;
   const seg = path.join(tmp, `seg${w}.mp4`);
   const ff = spawn('ffmpeg', ['-v', 'error', '-y', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-',
-    '-c:v', 'libx264', '-preset', 'medium', '-crf', '15', '-pix_fmt', 'yuv420p', '-r', String(FPS), seg], { stdio: ['pipe', 'inherit', 'inherit'] });
+    '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-maxrate', '5500k', '-bufsize', '11000k', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-r', String(FPS), seg], { stdio: ['pipe', 'inherit', 'inherit'] });
   const { page, close } = await openScene({ port: 5400 + w, scale: SCALE });
   for (let f = a; f < b; f++) {
     const t = FROM + f / FPS;
