@@ -1,0 +1,17 @@
+{
+  "name": "roblox-monster-video",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vidéo 3D style Roblox (9:16) – Le monstre qui ne bouge que dans le noir",
+  "scripts": {
+    "preview": "node scripts/serve.mjs",
+    "sfx": "node scripts/make-sfx.mjs",
+    "render": "node scripts/render.mjs",
+    "render:test": "node scripts/render.mjs --from 0 --to 8 --out out/test.mp4"
+  },
+  "dependencies": {
+    "three": "0.170.0",
+    "@fontsource/luckiest-guy": "5.1.0"
+  }
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monstre dans le noir – Prévisualisation</title>
+<style>
+  @font-face { font-family: "Luckiest Guy"; src: url("node_modules/@fontsource/luckiest-guy/files/luckiest-guy-latin-400-normal.woff2") format("woff2"); }
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0d0f14; color: #e8e8ee; font: 14px system-ui, sans-serif; overflow: hidden; }
+  #wrap { display: flex; height: 100%; gap: 16px; padding: 12px; box-sizing: border-box; }
+  #stage { position: relative; height: 100%; aspect-ratio: 9 / 16; flex: none; background: #000; border-radius: 10px; overflow: hidden; }
+  #stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #ui { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 10px; }
+  #ui button { background: #1d2230; color: #e8e8ee; border: 1px solid #2c3446; border-radius: 6px; padding: 6px 10px; text-align: left; cursor: pointer; }
+  #ui button.on { background: #ffe41a; color: #111; }
+  #play { font-size: 18px; text-align: center !important; }
+  #shots { overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+  input[type=range] { width: 100%; }
+  body.render #ui { display: none; } body.render #wrap { padding: 0; }
+  body.render #stage { border-radius: 0; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./node_modules/three/build/three.module.js",
+  "three/addons/": "./node_modules/three/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage"><canvas id="gl" width="1080" height="1920"></canvas><canvas id="overlay"></canvas></div>
+  <div id="ui">
+    <h2 style="margin:0">Le monstre qui ne bouge que dans le noir</h2>
+    <button id="play">▶︎ Lecture / Pause (Espace)</button>
+    <input id="scrub" type="range" min="0" step="0.01" value="0">
+    <div id="time"></div><div id="shot" style="font-weight:600"></div>
+    <div id="shots"></div>
+    <audio id="vo" src="assets/audio/voiceover.mp3" preload="auto"></audio>
+  </div>
+</div>
+<script>if (location.search.includes('render')) document.body.classList.add('render');</script>
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
