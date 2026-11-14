@@ -56,6 +56,22 @@ function faceTexture(kind) {
         brow(70, 96, 104, 84); brow(152, 84, 186, 96);
         mouth(() => { ctx.moveTo(104, 192); ctx.quadraticCurveTo(128, 174, 152, 192); ctx.stroke(); });
         break;
+      case 'infected':
+        ctx.fillStyle = '#ff2a1a'; ctx.shadowColor = '#ff0000'; ctx.shadowBlur = 25;
+        ctx.beginPath(); ctx.ellipse(88, 122, 19, 17, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(168, 122, 19, 17, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffd0b0'; ctx.shadowBlur = 0;
+        ctx.beginPath(); ctx.arc(88, 122, 6, 0, Math.PI * 2); ctx.fill(); ctx.beginPath(); ctx.arc(168, 122, 6, 0, Math.PI * 2); ctx.fill();
+        brow(62, 90, 110, 104); brow(146, 104, 194, 90);
+        mouth(() => { ctx.moveTo(110, 186); ctx.lineTo(148, 184); ctx.stroke(); });
+        break;
+      case 'baby':
+        ctx.strokeStyle = '#2a1712'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.arc(88, 124, 16, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+        ctx.beginPath(); ctx.arc(168, 124, 16, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+        ctx.fillStyle = 'rgba(230,120,120,0.45)'; ctx.beginPath(); ctx.arc(64, 160, 16, 0, 7); ctx.fill(); ctx.beginPath(); ctx.arc(192, 160, 16, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(128, 180, 9, 0, Math.PI); ctx.stroke();
+        break;
       case 'zombie':
       case 'zombie2':
         eye(86, 120, 18, 18); eye(170, 116, kind === 'zombie2' ? 12 : 18, kind === 'zombie2' ? 14 : 18);
@@ -156,9 +172,15 @@ export function makeCharacter(scene, spec = {}) {
 
   const ch = {
     root, body, hips, torso, neck, head, armL, armR, legL, legR, spec: S,
-    setFace(kind) { faceMesh.material.map = faceTexture(kind); faceMesh.material.needsUpdate = true; ch.face = kind; },
+    setFace(kind) {
+      if (ch.face === kind) return;
+      const tx = faceTexture(kind); const m = faceMesh.material;
+      m.map = tx; m.emissiveMap = kind === 'infected' ? tx : null; m.emissive.set(kind === 'infected' ? '#ff6a50' : '#000000'); m.emissiveIntensity = kind === 'infected' ? 2.2 : 0;
+      m.needsUpdate = true; ch.face = kind;
+    },
     face: S.face,
   };
+  ch.faceMesh = faceMesh;
 
   /**
    * Pose by blending named motions. m = { walk, run, idle, zombie, cower, lookBack, wave, crouch, phase, t }
@@ -167,29 +189,33 @@ export function makeCharacter(scene, spec = {}) {
     const t = m.t ?? 0, ph = m.phase ?? 0;
     const walk = m.walk ?? 0, run = m.run ?? 0, z = m.zombie ?? 0, cower = m.cower ?? 0, idle = 1;
     const look = m.lookBack ?? 0, crouch = m.crouch ?? 0, point = m.point ?? 0, reach = m.reach ?? 0;
+    const sit = m.sit ?? 0, bow = m.bow ?? 0, shush = m.shush ?? 0, reachR = m.reachR ?? 0, hold = m.hold ?? 0, swim = m.swim ?? 0;
     const s = Math.sin(ph), c = Math.cos(ph), s2 = Math.sin(ph * 2);
     const breath = Math.sin(t * 2.2) * 0.02;
     // legs
     const legA = s * (0.55 * walk + 0.95 * run) + s * 0.35 * z;
-    legL.pivot.rotation.x = legA - crouch * 1.2; legR.pivot.rotation.x = -legA - crouch * 1.2;
+    legL.pivot.rotation.x = legA - crouch * 1.2 - sit * 1.5 + swim * Math.sin(t * 8) * 0.3; legR.pivot.rotation.x = -legA - crouch * 1.2 - sit * 1.5 - swim * Math.sin(t * 8) * 0.3;
     legL.knee.rotation.x = -Math.max(0, -c) * (0.6 * walk + 1.4 * run) * 1 + crouch * 2.0;
     legR.knee.rotation.x = -Math.max(0, c) * (0.6 * walk + 1.4 * run) + crouch * 2.0;
     legL.knee.rotation.x *= -1; legR.knee.rotation.x *= -1;
+    legL.knee.rotation.x += sit * 1.5; legR.knee.rotation.x += sit * 1.5;
     // arms
     const armA = s * (0.5 * walk + 1.1 * run);
-    armL.pivot.rotation.set(-armA * (1 - z) + z * -1.45 + breath - cower * 1.9 - reach * 1.5, 0, -0.06 - z * 0.05 + cower * 0.35);
-    armR.pivot.rotation.set(armA * (1 - z) + z * -1.35 + noise1(t * 1.3, 4) * 0.12 * z - breath - cower * 1.9 - point * 1.55 - reach * 1.5, 0, 0.06 + z * 0.05 - cower * 0.35);
-    armL.knee.rotation.x = -(0.25 * walk + 1.2 * run) - cower * 1.1;
-    armR.knee.rotation.x = -(0.25 * walk + 1.2 * run) - cower * 1.1;
+    armL.pivot.rotation.set(-armA * (1 - z) + z * (1 - bow) * -1.45 + breath - cower * 1.9 - reach * 1.5 - hold * 1.1 + bow * 0.5 - swim * (1.5 + Math.sin(t * 4) * 1.4), 0, -0.06 - z * 0.05 + cower * 0.35);
+    armR.pivot.rotation.set(armA * (1 - z) + z * (1 - bow) * -1.35 + noise1(t * 1.3, 4) * 0.12 * z - breath - cower * 1.9 - point * 1.55 - reach * 1.5 - reachR * 1.45 - shush * 1.25 - hold * 1.1 + bow * 0.5 - swim * (1.5 - Math.sin(t * 4) * 1.4), 0, 0.06 + z * 0.05 - cower * 0.35);
+    armL.knee.rotation.x = -(0.25 * walk + 1.2 * run) - cower * 1.1 - hold * 0.9;
+    armL.pivot.rotation.z += hold * 0.35;
+    armR.knee.rotation.x = -(0.25 * walk + 1.2 * run) - cower * 1.1 - shush * 1.9 - hold * 0.9;
+    armR.pivot.rotation.z += -shush * 0.45 - hold * 0.35;
     // torso/hips
-    hips.position.y = 2.15 + Math.abs(s) * (0.12 * walk + 0.28 * run) - crouch * 0.9 - cower * 0.3;
-    torso.rotation.x = 0.05 * walk + 0.32 * run + 0.28 * z + cower * 0.35 + crouch * 0.4 + breath;
+    hips.position.y = 2.15 + Math.abs(s) * (0.12 * walk + 0.28 * run) - crouch * 0.9 - cower * 0.3 - sit * 1.05;
+    torso.rotation.x = 0.05 * walk + 0.32 * run + 0.28 * z * (1 - bow) + cower * 0.35 + crouch * 0.4 + breath + bow * 0.85 - sit * 0.1;
     torso.rotation.y = s * (0.06 * walk + 0.1 * run) + look * 0.55;
     torso.rotation.z = z * Math.sin(ph * 0.5) * 0.1;
     hips.rotation.y = -s * 0.08 * (walk + run);
     // head
     neck.rotation.y = look * 0.9 + (m.headYaw ?? 0) + noise1(t * 0.6, S.seed) * 0.08 * idle;
-    neck.rotation.x = -0.1 * run + (m.headPitch ?? 0) + z * 0.25 + cower * 0.2;
+    neck.rotation.x = -0.1 * run + (m.headPitch ?? 0) + z * 0.25 * (1 - bow) + cower * 0.2 + bow * 0.45;
     neck.rotation.z = z * 0.35 + noise1(t * 0.8, S.seed + 2) * 0.05;
   };
   ch.pose({});
@@ -208,4 +234,25 @@ export function zombieSpec(i) {
     pants: pants[Math.floor(r() * pants.length)], shoes: '#2a2420', hair: r() < 0.6 ? ['#2b2018', '#4a3a2a', '#222'][i % 3] : null,
     hood: false, zombie: true, face: i % 2 ? 'zombie2' : 'zombie', seed: 200 + i,
   };
+}
+
+export function npcSpec(i) {
+  const r = rng(500 + i);
+  const skins = ['#f1c9a5', '#e0ac7e', '#c68b5e', '#8d5a3b', '#f3d2b3'];
+  const shirts = ['#3a6ea5', '#c0392b', '#2e8b57', '#d4a017', '#7d3c98', '#e67e22', '#f2f2f2', '#16a085'];
+  const pants = ['#2c3e50', '#34495e', '#5d4037', '#212121', '#1f3a5f'];
+  const hair = ['#2b1a10', '#6b4423', '#d9b46a', '#111111', '#8e3b1e'];
+  return { skin: skins[i % skins.length], shirt: shirts[Math.floor(r() * shirts.length)], shirtAccent: '#00000000', pants: pants[Math.floor(r() * pants.length)],
+    shoes: '#2b2b2b', hair: hair[Math.floor(r() * hair.length)], hood: false, face: 'neutral', seed: 600 + i };
+}
+
+/** Swaddled newborn: blanket bundle + little head. */
+export function makeBaby(scene) {
+  const g = new THREE.Group(); scene.add(g);
+  const blanket = new THREE.Mesh(new RoundedBoxGeometry(0.9, 0.7, 1.5, 3, 0.3), std('#4f86cf', 1)); blanket.castShadow = true; g.add(blanket);
+  const head = new THREE.Mesh(new RoundedBoxGeometry(0.62, 0.6, 0.6, 3, 0.2), std('#f0c8a8', 0.7)); head.position.set(0, 0.22, -0.72); g.add(head);
+  const face = new THREE.Mesh(new THREE.PlaneGeometry(0.58, 0.58), new THREE.MeshStandardMaterial({ map: faceTexture('baby'), transparent: true, polygonOffset: true, polygonOffsetFactor: -2 }));
+  face.position.set(0, 0.52, -0.72); face.rotation.x = -Math.PI / 2; g.add(face);
+  head.rotation.x = 0;
+  return g;
 }

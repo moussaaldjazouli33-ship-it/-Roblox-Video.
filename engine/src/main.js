@@ -37,7 +37,14 @@ const world = buildWorld(scene);
   const fade = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false, toneMapped: false }));
   fade.renderOrder = 1000; fade.position.z = -0.99; camera.add(fade);
   camera.userData.fade = fade;
-  camera.userData.fitFade = () => { const h = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)); fade.scale.set(h * camera.aspect, h, 1); };
+  // extra overlays: white flash, red pulse, and an "old recording" grade (sepia + scanlines + flicker)
+  const mk = (color, order, z, map) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color, map, transparent: true, opacity: 0, depthTest: false, depthWrite: false, fog: false, toneMapped: false })); m.renderOrder = order; m.position.z = z; camera.add(m); return m; };
+  const lines = document.createElement('canvas'); lines.width = 8; lines.height = 512; const lg = lines.getContext('2d');
+  for (let y = 0; y < 512; y += 4) { lg.fillStyle = 'rgba(0,0,0,0.55)'; lg.fillRect(0, y, 8, 2); }
+  const lt = new THREE.CanvasTexture(lines); lt.wrapS = lt.wrapT = THREE.RepeatWrapping; lt.repeat.set(1, 1.8);
+  const white = mk('#ffffff', 1001, -0.98), red = mk('#ff1a0a', 1002, -0.97), sepia = mk('#7a5a2a', 997, -0.995), scan = mk('#ffffff', 998, -0.994, lt);
+  camera.userData.ov = { white, red, sepia, scan, black: fade };
+  camera.userData.fitFade = () => { const h = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)); for (const m of [fade, white, red, sepia, scan]) m.scale.set(h * camera.aspect, h, 1); };
 }
 
 const ctx = { THREE, scene, camera, renderer, world, makeCharacter };
@@ -48,10 +55,12 @@ const _p = new THREE.Vector3(), _l = new THREE.Vector3();
 function vec(v, t) { return typeof v === 'function' ? v(t) : v; }
 
 /** Shot = { start, end, from:{pos, look}, to:{pos, look}, fov, fovTo, shake, ease } — pos/look can be fns(t). */
-function applyCamera(t) {
+function findShot(t) {
   const shots = story.shots;
-  let s = shots[shots.length - 1];
-  for (const sh of shots) if (t >= sh.start && t < sh.end) { s = sh; break; }
+  for (const sh of shots) if (t >= sh.start && t < sh.end) return sh;
+  return shots[shots.length - 1];
+}
+function applyCamera(t, s) {
   const k = (s.ease || easeInOut)(clamp((t - s.start) / (s.end - s.start)));
   const fp = vec(s.from.pos, t), tp = vec((s.to || s.from).pos, t);
   const fl = vec(s.from.look, t), tl = vec((s.to || s.from).look, t);
@@ -68,11 +77,18 @@ function applyCamera(t) {
 }
 
 window.renderAt = (t) => {
-  story.update(t, ctx);
-  applyCamera(t);
-  world.update(t, camera);
-  const f = story.fade ? story.fade(t) : 0;
-  camera.userData.fade.material.opacity = f;
+  const shot = findShot(t);
+  story.update(t, ctx, shot);
+  applyCamera(t, shot);
+  world.skyMesh.position.copy(camera.position);
+  { const d = new THREE.Vector3(); camera.getWorldDirection(d); d.y = 0; d.normalize().multiplyScalar(14); world.focusShadow(new THREE.Vector3(camera.position.x + d.x, 0, camera.position.z + d.z)); }
+  if (world.group.visible) world.update(t, camera);
+  else world.updaters[0](t, camera); // keep fill light following the camera
+  const ov = Object.assign({ black: 0, white: 0, red: 0, old: 0 }, story.overlay ? story.overlay(t, shot) : {});
+  const O = camera.userData.ov;
+  O.black.material.opacity = ov.black; O.white.material.opacity = ov.white; O.red.material.opacity = ov.red;
+  O.sepia.material.opacity = ov.old * (0.42 + 0.05 * Math.sin(t * 37));
+  O.scan.material.opacity = ov.old * 0.5; O.scan.material.map.offset.y = (t * 0.7) % 1;
   renderer.render(scene, camera);
 };
 window.frameJPEG = (t, q = 0.93) => { window.renderAt(t); return renderer.domElement.toDataURL('image/jpeg', q); };

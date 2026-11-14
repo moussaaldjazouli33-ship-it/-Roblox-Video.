@@ -52,7 +52,7 @@ const PALETTE = [
 export function buildWorld(scene, opts = {}) {
   const r = rng(opts.seed ?? 7);
   const world = { updaters: [], colliders: [] };
-  const group = new THREE.Group(); scene.add(group);
+  const group = new THREE.Group(); scene.add(group); world.group = group;
 
   // ---------- sky ----------
   const skyMat = new THREE.ShaderMaterial({
@@ -71,7 +71,7 @@ export function buildWorld(scene, opts = {}) {
         gl_FragColor = vec4(c,1.); }`,
   });
   const sky = new THREE.Mesh(new THREE.SphereGeometry(900, 32, 16), skyMat);
-  sky.frustumCulled = false; scene.add(sky);
+  sky.frustumCulled = false; scene.add(sky); world.skyMesh = sky;
   world.sky = skyMat;
 
   scene.fog = new THREE.Fog('#e39274', 40, 260);
@@ -354,6 +354,12 @@ export function buildWorld(scene, opts = {}) {
     tense:  { top: '#4a2e45', mid: '#a5503f', hor: '#d9805a', fog: '#b4634f', fogNear: 25, fogFar: 180, sun: '#ff9a5c', sunI: 2.4, hemiSky: '#e09a80', hemiGround: '#3a2e36', hemiI: 1.0, lamp: 0.3, exposure: 0.92 },
     danger: { top: '#2a1420', mid: '#7c2a24', hor: '#c2442c', fog: '#7e2d26', fogNear: 18, fogFar: 140, sun: '#ff6a3a', sunI: 2.2, hemiSky: '#c0584a', hemiGround: '#2a1a1e', hemiI: 0.9, lamp: 0.6, exposure: 0.9 },
     night:  { top: '#0d1022', mid: '#232845', hor: '#3d3f5e', fog: '#262a44', fogNear: 15, fogFar: 140, sun: '#8ea0ff', sunI: 1.0, hemiSky: '#6b78b8', hemiGround: '#141420', hemiI: 0.7, lamp: 2.5, exposure: 1.0 },
+    ocean:  { top: '#0b3550', mid: '#11506e', hor: '#1d7795', fog: '#13607e', fogNear: 4, fogFar: 70, sun: '#bfefff', sunI: 1.6, hemiSky: '#8fe3ff', hemiGround: '#0d2c3a', hemiI: 1.3, lamp: 0, exposure: 1.05 },
+    mansion:{ top: '#000000', mid: '#000000', hor: '#000000', fog: '#2a1d14', fogNear: 40, fogFar: 140, sun: '#ffe2b0', sunI: 0.0, hemiSky: '#ffe6c4', hemiGround: '#6b5240', hemiI: 1.5, lamp: 0, exposure: 1.05 },
+    silent: { top: '#000000', mid: '#000000', hor: '#000000', fog: '#0a0606', fogNear: 8, fogFar: 45, sun: '#ff5040', sunI: 0.0, hemiSky: '#6a4a48', hemiGround: '#120a0a', hemiI: 0.35, lamp: 0, exposure: 1.0 },
+    vault:  { top: '#000000', mid: '#000000', hor: '#000000', fog: '#0d1116', fogNear: 15, fogFar: 90, sun: '#9fb4d0', sunI: 0.0, hemiSky: '#8a9ab8', hemiGround: '#15181e', hemiI: 0.8, lamp: 0, exposure: 1.0 },
+    alarm:  { top: '#000000', mid: '#000000', hor: '#000000', fog: '#1e0606', fogNear: 15, fogFar: 85, sun: '#ff3020', sunI: 0.0, hemiSky: '#c04030', hemiGround: '#200606', hemiI: 0.9, lamp: 0, exposure: 1.0 },
+    lab:    { top: '#000000', mid: '#000000', hor: '#000000', fog: '#c9d6cf', fogNear: 30, fogFar: 120, sun: '#ffffff', sunI: 0.0, hemiSky: '#f4fff8', hemiGround: '#7d8a84', hemiI: 1.7, lamp: 0, exposure: 1.0 },
     dawn:   { top: '#6f7fae', mid: '#e3a58a', hor: '#ffd2a1', fog: '#e8b79c', fogNear: 50, fogFar: 300, sun: '#ffe0b0', sunI: 3.0, hemiSky: '#ffe2c8', hemiGround: '#6a5a5a', hemiI: 1.4, lamp: 0, exposure: 1.05 },
   };
   const ca = new THREE.Color(), cb = new THREE.Color();
